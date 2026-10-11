@@ -15,24 +15,32 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android NDK
+      - name: Install host tools
         run: |
-          sdkmanager --install "ndk;30.0.16248370"
+          sudo apt-get update
+          sudo apt-get install -y curl unzip
 
-      - name: Add NDK compiler to PATH
+      - name: Download Android NDK
         run: |
-          echo "$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+          curl -fL --retry 3 \
+            https://dl.google.com/android/repository/android-ndk-r27d-linux.zip \
+            -o "$RUNNER_TEMP/ndk.zip"
+
+      - name: Extract Android NDK
+        run: |
+          mkdir -p "$RUNNER_TEMP/android-ndk"
+          unzip -q "$RUNNER_TEMP/ndk.zip" \
+            -d "$RUNNER_TEMP/android-ndk"
+
+          echo "$RUNNER_TEMP/android-ndk/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+            >> "$GITHUB_PATH"
 
       - name: Verify Android ARM64 compiler
         run: |
           aarch64-linux-android24-clang --version
-          echo "NDK compiler is available."
 
-      - name: Verify Android linker
+      - name: Verify LLVM tools
         run: |
           llvm-readelf --version
-          echo "NDK inspection tools are available."
+          echo "NDK toolchain check passed."
           
