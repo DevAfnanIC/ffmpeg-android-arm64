@@ -1,5 +1,5 @@
 
-name: Android NDK Toolchain Check
+name: FFmpeg Android ARM64 Core Build
 
 on:
   workflow_dispatch:
@@ -8,8 +8,14 @@ permissions:
   contents: read
 
 jobs:
-  toolchain:
+  build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    env:
+      NDK_VERSION: r27d
+      ANDROID_API: "24"
+      FFMPEG_VERSION: "9.0.2"
 
     steps:
       - name: Check out repository
@@ -18,7 +24,7 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip
+          sudo apt-get install -y curl unzip xz-utils make perl
 
       - name: Download Android NDK
         run: |
@@ -28,19 +34,93 @@ jobs:
 
       - name: Extract Android NDK
         run: |
-          mkdir -p "$RUNNER_TEMP/android-ndk"
           unzip -q "$RUNNER_TEMP/ndk.zip" \
-            -d "$RUNNER_TEMP/android-ndk"
+            -d "$RUNNER_TEMP"
 
-          echo "$RUNNER_TEMP/android-ndk/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin" \
+          echo "NDK=$RUNNER_TEMP/android-ndk-r27d" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin" \
             >> "$GITHUB_PATH"
 
-      - name: Verify Android ARM64 compiler
+      - name: Download FFmpeg source
         run: |
-          aarch64-linux-android24-clang --version
+          curl -fL --retry 3 \
+            "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
+            -o "$RUNNER_TEMP/ffmpeg.tar.xz"
 
-      - name: Verify LLVM tools
+          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" \
+            -C "$RUNNER_TEMP"
+
+          echo "FFMPEG_SRC=$RUNNER_TEMP/ffmpeg-${FFMPEG_VERSION}" \
+            >> "$GITHUB_ENV"
+
+      - name: Configure FFmpeg for Android ARM64
+        working-directory: ${{ runner.temp }}
         run: |
-          llvm-readelf --version
-          echo "NDK toolchain check passed."
+          set -euo pipefail
+
+          PREFIX="$RUNNER_TEMP/ffmpeg-install"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          SYSROOT="$TOOLCHAIN/sysroot"
+
+          cd "$FFMPEG_SRC"
+
+          ./configure \
+            --prefix="$PREFIX" \
+            --libdir="$PREFIX/lib" \
+            --arch=aarch64 \
+            --target-os=android \
+            --enable-cross-compile \
+            --sysroot="$SYSROOT" \
+            --cc="aarch64-linux-android${ANDROID_API}-clang" \
+            --cxx="aarch64-linux-android${ANDROID_API}-clang++" \
+            --ar=llvm-ar \
+            --ranlib=llvm-ranlib \
+            --nm=llvm-nm \
+            --strip=llvm-strip \
+            --enable-pic \
+            --enable-shared \
+            --disable-static \
+            --disable-programs \
+            --disable-doc \
+            --disable-debug \
+            --disable-autodetect
+
+      - name: Compile FFmpeg
+        run: |
+          set -euo pipefail
+
+          cd "$FFMPEG_SRC"
+          make -j2
+          make install
+
+      - name: Verify Android shared libraries
+        run: |
+          set -euo pipefail
+
+          LIBDIR="$RUNNER_TEMP/ffmpeg-install/lib"
+          test -f "$LIBDIR/libavcodec.so"
+          test -f "$LIBDIR/libavformat.so"
+          test -f "$LIBDIR/libavutil.so"
+
+          llvm-readelf -h "$LIBDIR/libavcodec.so" \
+            | tee "$RUNNER_TEMP/elf-header.txt"
+
+          grep -q "AArch64" "$RUNNER_TEMP/elf-header.txt"
+
+          echo "Verified FFmpeg Android ARM64 shared libraries."
+
+      - name: Package build output
+        run: |
+          set -euo pipefail
+
+          tar -czf "$RUNNER_TEMP/ffmpeg-android-arm64-core.tar.gz" \
+            -C "$RUNNER_TEMP/ffmpeg-install" lib
+
+      - name: Upload FFmpeg libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-9.0.2-android-arm64-core
+          path: ${{ runner.temp }}/ffmpeg-android-arm64-core.tar.gz
+          if-no-files-found: error
+          retention-days: 14
           
