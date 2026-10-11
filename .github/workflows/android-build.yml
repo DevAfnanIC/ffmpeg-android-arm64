@@ -1,0 +1,38 @@
+
+name: Android NDK Toolchain Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  toolchain:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: |
+          sdkmanager --install "ndk;30.0.16248370"
+
+      - name: Add NDK compiler to PATH
+        run: |
+          echo "$ANDROID_HOME/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Android ARM64 compiler
+        run: |
+          aarch64-linux-android24-clang --version
+          echo "NDK compiler is available."
+
+      - name: Verify Android linker
+        run: |
+          llvm-readelf --version
+          echo "NDK inspection tools are available."
+          
