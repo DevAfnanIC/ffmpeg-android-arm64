@@ -45,12 +45,20 @@ jobs:
           llvm-ar --version
           llvm-ranlib --version
 
+      
       - name: Build x264 static library
         run: |
           set -euo pipefail
 
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           PREFIX="$RUNNER_TEMP/deps"
+
+          export CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+          export AR="$TOOLCHAIN/bin/llvm-ar"
+          export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
+          export STRIP="$TOOLCHAIN/bin/llvm-strip"
+
+          "$CC" --version
 
           git clone --depth 1 \
             https://github.com/mirror/x264.git \
@@ -65,15 +73,15 @@ jobs:
             --sysroot="$TOOLCHAIN/sysroot" \
             --enable-static \
             --enable-pic \
-            --disable-shared \
-            --disable-cli
+            --disable-cli \
+            --disable-opencl
 
           make -j2
           make install
 
           test -f "$PREFIX/lib/libx264.a"
           echo "x264 static library built successfully."
-
+          
       - name: Build x265 static library
         run: |
           set -euo pipefail
