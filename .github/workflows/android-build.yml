@@ -1,5 +1,5 @@
 
-name: FFmpeg Android ARM64 Core Build
+name: FFmpeg Android ARM64 Build
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
 
     env:
       NDK_VERSION: r27d
@@ -24,7 +24,8 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl unzip xz-utils make perl
+          sudo apt-get install -y \
+            curl unzip xz-utils make perl cmake ninja-build nasm git pkg-config
 
       - name: Download Android NDK
         run: |
@@ -32,17 +33,82 @@ jobs:
             https://dl.google.com/android/repository/android-ndk-r27d-linux.zip \
             -o "$RUNNER_TEMP/ndk.zip"
 
-      - name: Extract Android NDK
-        run: |
-          unzip -q "$RUNNER_TEMP/ndk.zip" \
-            -d "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
 
           echo "NDK=$RUNNER_TEMP/android-ndk-r27d" >> "$GITHUB_ENV"
           echo "$RUNNER_TEMP/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin" \
             >> "$GITHUB_PATH"
 
+      - name: Verify Android toolchain
+        run: |
+          aarch64-linux-android24-clang --version
+          llvm-ar --version
+          llvm-ranlib --version
+
+      - name: Build x264 static library
+        run: |
+          set -euo pipefail
+
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          PREFIX="$RUNNER_TEMP/deps"
+
+          git clone --depth 1 \
+            https://github.com/mirror/x264.git \
+            "$RUNNER_TEMP/x264"
+
+          cd "$RUNNER_TEMP/x264"
+
+          ./configure \
+            --prefix="$PREFIX" \
+            --host=aarch64-linux \
+            --cross-prefix="$TOOLCHAIN/bin/aarch64-linux-android-" \
+            --sysroot="$TOOLCHAIN/sysroot" \
+            --enable-static \
+            --enable-pic \
+            --disable-shared \
+            --disable-cli
+
+          make -j2
+          make install
+
+          test -f "$PREFIX/lib/libx264.a"
+          echo "x264 static library built successfully."
+
+      - name: Build x265 static library
+        run: |
+          set -euo pipefail
+
+          PREFIX="$RUNNER_TEMP/deps"
+
+          git clone --depth 1 \
+            https://github.com/videolan/x265.git \
+            "$RUNNER_TEMP/x265"
+
+          cmake -S "$RUNNER_TEMP/x265/source" \
+            -B "$RUNNER_TEMP/x265-build" \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DENABLE_PIC=ON \
+            -DENABLE_ASSEMBLY=OFF \
+            -DENABLE_LIBNUMA=OFF
+
+          cmake --build "$RUNNER_TEMP/x265-build" --parallel 2
+          cmake --install "$RUNNER_TEMP/x265-build"
+
+          test -f "$PREFIX/lib/libx265.a"
+          echo "x265 static library built successfully."
+
       - name: Download FFmpeg source
         run: |
+          set -euo pipefail
+
           curl -fL --retry 3 \
             "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" \
             -o "$RUNNER_TEMP/ffmpeg.tar.xz"
@@ -53,8 +119,7 @@ jobs:
           echo "FFMPEG_SRC=$RUNNER_TEMP/ffmpeg-${FFMPEG_VERSION}" \
             >> "$GITHUB_ENV"
 
-      - name: Configure FFmpeg for Android ARM64
-        working-directory: ${{ runner.temp }}
+      - name: Configure FFmpeg core
         run: |
           set -euo pipefail
 
@@ -85,7 +150,7 @@ jobs:
             --disable-debug \
             --disable-autodetect
 
-      - name: Compile FFmpeg
+      - name: Compile FFmpeg core
         run: |
           set -euo pipefail
 
@@ -93,34 +158,53 @@ jobs:
           make -j2
           make install
 
-      - name: Verify Android shared libraries
+      - name: Verify build outputs
         run: |
           set -euo pipefail
 
+          PREFIX="$RUNNER_TEMP/deps"
           LIBDIR="$RUNNER_TEMP/ffmpeg-install/lib"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          test -f "$PREFIX/lib/libx264.a"
+          test -f "$PREFIX/lib/libx265.a"
           test -f "$LIBDIR/libavcodec.so"
           test -f "$LIBDIR/libavformat.so"
           test -f "$LIBDIR/libavutil.so"
 
-          llvm-readelf -h "$LIBDIR/libavcodec.so" \
-            | tee "$RUNNER_TEMP/elf-header.txt"
+          "$TOOLCHAIN/llvm-readelf" -h "$LIBDIR/libavcodec.so" \
+            | grep -q "AArch64"
 
-          grep -q "AArch64" "$RUNNER_TEMP/elf-header.txt"
+          echo "All required checkpoint outputs exist."
 
-          echo "Verified FFmpeg Android ARM64 shared libraries."
-
-      - name: Package build output
+      - name: Package build outputs
         run: |
           set -euo pipefail
 
-          tar -czf "$RUNNER_TEMP/ffmpeg-android-arm64-core.tar.gz" \
-            -C "$RUNNER_TEMP/ffmpeg-install" lib
+          mkdir -p "$RUNNER_TEMP/package"
 
-      - name: Upload FFmpeg libraries
+          cp -a "$RUNNER_TEMP/ffmpeg-install/lib" \
+            "$RUNNER_TEMP/package/ffmpeg-lib"
+
+          mkdir -p "$RUNNER_TEMP/package/deps"
+          cp "$RUNNER_TEMP/deps/lib/libx264.a" \
+            "$RUNNER_TEMP/package/deps/"
+          cp "$RUNNER_TEMP/deps/lib/libx265.a" \
+            "$RUNNER_TEMP/package/deps/"
+
+          if [ -d "$RUNNER_TEMP/deps/include" ]; then
+            cp -a "$RUNNER_TEMP/deps/include" \
+              "$RUNNER_TEMP/package/deps/"
+          fi
+
+          tar -czf "$RUNNER_TEMP/ffmpeg-android-arm64-codecs.tar.gz" \
+            -C "$RUNNER_TEMP/package" .
+
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-9.0.2-android-arm64-core
-          path: ${{ runner.temp }}/ffmpeg-android-arm64-core.tar.gz
+          name: ffmpeg-9.0.2-android-arm64-codecs
+          path: ${{ runner.temp }}/ffmpeg-android-arm64-codecs.tar.gz
           if-no-files-found: error
           retention-days: 14
           
