@@ -228,31 +228,30 @@ jobs:
 
           test -s "$FFMPEG"
 
-          echo "Checking executable architecture..."
+          echo "Checking ARM64 architecture..."
           "$TOOLCHAIN/llvm-readelf" -h "$FFMPEG" \
             | tee "$RUNNER_TEMP/elf-header.txt"
 
           grep -q "AArch64" "$RUNNER_TEMP/elf-header.txt"
 
-          echo "Checking linked libraries..."
+          echo "Checking encoder configuration..."
+          grep -q '^#define CONFIG_LIBX264 1$' \
+            "$FFMPEG_SRC/config.h"
+          grep -q '^#define CONFIG_LIBX265 1$' \
+            "$FFMPEG_SRC/config.h"
+
+          grep -q '^CONFIG_LIBX264_ENCODER=yes$' \
+            "$FFMPEG_SRC/ffbuild/config.mak"
+          grep -q '^CONFIG_LIBX265_ENCODER=yes$' \
+            "$FFMPEG_SRC/ffbuild/config.mak"
+
+          echo "Checking dynamic library dependencies..."
           "$TOOLCHAIN/llvm-readelf" -d "$FFMPEG" \
             | tee "$RUNNER_TEMP/dynamic-section.txt"
 
-          echo "Checking FFmpeg encoder configuration..."
-          echo "Checking encoder-related configuration..."
-
-          grep -Ei 'x264|x265|hevc|h264' \
-            "$FFMPEG_SRC/config.h" || true
-
-          echo "Checking configure results..."
-          grep -Ei 'x264|x265' \
-            "$FFMPEG_SRC/ffbuild/config.log" | tail -80 || true
-
-          echo "Checking generated codec configuration..."
-          grep -Ei 'x264|x265' \
-            "$FFMPEG_SRC/ffbuild/config.mak" || true
-
-          echo "Configuration inspection completed."
+          echo "SUCCESS: ARM64 executable verified."
+          echo "SUCCESS: libx264 encoder enabled."
+          echo "SUCCESS: libx265 encoder enabled."
     
       - name: Package executable
         run: |
