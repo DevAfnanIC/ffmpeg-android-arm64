@@ -47,6 +47,7 @@ jobs:
 
       
       
+      
       - name: Build x264 static library
         run: |
           set -euo pipefail
@@ -55,27 +56,20 @@ jobs:
           PREFIX="$RUNNER_TEMP/deps"
           CROSS="$TOOLCHAIN/bin/aarch64-linux-android-"
 
-          # Map the NDK LLVM tools to the names x264 expects.
-          for tool in ar ranlib strip nm strings; do
-            case "$tool" in
-              ar)      llvm_tool="llvm-ar" ;;
-              ranlib)  llvm_tool="llvm-ranlib" ;;
-              strip)   llvm_tool="llvm-strip" ;;
-              nm)      llvm_tool="llvm-nm" ;;
-              strings) llvm_tool="llvm-strings" ;;
-            esac
+          # Create the tool names x264 expects.
+          ln -sf "$TOOLCHAIN/bin/llvm-ar" "${CROSS}ar"
+          ln -sf "$TOOLCHAIN/bin/llvm-ranlib" "${CROSS}ranlib"
+          ln -sf "$TOOLCHAIN/bin/llvm-strip" "${CROSS}strip"
+          ln -sf "$TOOLCHAIN/bin/llvm-nm" "${CROSS}nm"
+          ln -sf "$TOOLCHAIN/bin/llvm-strings" "${CROSS}strings"
 
-            test -x "$TOOLCHAIN/bin/$llvm_tool"
-            ln -sf "$TOOLCHAIN/bin/$llvm_tool" "${CROSS}${tool}"
-          done
-
-          export CC="${CROSS}clang"
+          export CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+          export AS="$CC"
           export AR="${CROSS}ar"
           export RANLIB="${CROSS}ranlib"
           export STRIP="${CROSS}strip"
 
           "$CC" --version
-          "${CROSS}strings" --version
 
           git clone --depth 1 \
             https://github.com/mirror/x264.git \
@@ -87,6 +81,8 @@ jobs:
             --prefix="$PREFIX" \
             --host=aarch64-linux \
             --cross-prefix="$CROSS" \
+            --cc="$CC" \
+            --as="$AS" \
             --sysroot="$TOOLCHAIN/sysroot" \
             --enable-static \
             --enable-pic \
@@ -98,6 +94,7 @@ jobs:
 
           test -f "$PREFIX/lib/libx264.a"
           echo "x264 static library built successfully."
+          
           
       - name: Build x265 static library
         run: |
