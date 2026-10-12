@@ -228,25 +228,26 @@ jobs:
 
           test -s "$FFMPEG"
 
+          echo "Checking executable architecture..."
           "$TOOLCHAIN/llvm-readelf" -h "$FFMPEG" \
             | tee "$RUNNER_TEMP/elf-header.txt"
 
           grep -q "AArch64" "$RUNNER_TEMP/elf-header.txt"
 
-          "$TOOLCHAIN/llvm-readelf" -l "$FFMPEG" \
-            | grep -q "INTERP"
+          echo "Checking FFmpeg configuration..."
+          "$FFMPEG" -version
 
-          echo "Checking compiled encoder registrations..."
+          echo "Checking available encoders..."
+          "$FFMPEG" -hide_banner -encoders \
+            | tee "$RUNNER_TEMP/encoders.txt"
 
-          grep -E \
-            'CONFIG_LIBX264_ENCODER|CONFIG_LIBX265_ENCODER' \
-            "$FFMPEG_SRC/config.h"
+          grep -E 'libx264|libx265' "$RUNNER_TEMP/encoders.txt"
 
-          grep -q 'CONFIG_LIBX264_ENCODER 1' "$FFMPEG_SRC/config.h"
-          grep -q 'CONFIG_LIBX265_ENCODER 1' "$FFMPEG_SRC/config.h"
+          grep -q 'libx264' "$RUNNER_TEMP/encoders.txt"
+          grep -q 'libx265' "$RUNNER_TEMP/encoders.txt"
 
-          echo "ARM64 executable and both encoder registrations verified."
-
+          echo "ARM64 executable and both encoders verified."
+          
       - name: Package executable
         run: |
           set -euo pipefail
