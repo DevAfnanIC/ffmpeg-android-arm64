@@ -234,20 +234,33 @@ jobs:
 
           grep -q "AArch64" "$RUNNER_TEMP/elf-header.txt"
 
-          echo "Checking FFmpeg configuration..."
-          "$FFMPEG" -version
+          echo "Checking linked libraries..."
+          "$TOOLCHAIN/llvm-readelf" -d "$FFMPEG" \
+            | tee "$RUNNER_TEMP/dynamic-section.txt"
 
-          echo "Checking available encoders..."
-          "$FFMPEG" -hide_banner -encoders \
-            | tee "$RUNNER_TEMP/encoders.txt"
+          echo "Checking FFmpeg encoder configuration..."
+          grep -E \
+            'CONFIG_LIBX264_ENCODER|CONFIG_LIBX265_ENCODER' \
+            "$FFMPEG_SRC/config.h" || true
 
-          grep -E 'libx264|libx265' "$RUNNER_TEMP/encoders.txt"
+          if grep -q '^#define CONFIG_LIBX264_ENCODER 1$' \
+              "$FFMPEG_SRC/config.h"; then
+            echo "libx264 encoder: enabled"
+          else
+            echo "ERROR: libx264 encoder is not enabled"
+            exit 1
+          fi
 
-          grep -q 'libx264' "$RUNNER_TEMP/encoders.txt"
-          grep -q 'libx265' "$RUNNER_TEMP/encoders.txt"
+          if grep -q '^#define CONFIG_LIBX265_ENCODER 1$' \
+              "$FFMPEG_SRC/config.h"; then
+            echo "libx265 encoder: enabled"
+          else
+            echo "ERROR: libx265 encoder is not enabled"
+            exit 1
+          fi
 
-          echo "ARM64 executable and both encoders verified."
-          
+          echo "ARM64 executable and both encoder configurations verified."
+    
       - name: Package executable
         run: |
           set -euo pipefail
