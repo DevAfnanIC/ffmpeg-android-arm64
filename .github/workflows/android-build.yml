@@ -128,8 +128,24 @@ jobs:
           test -s "$PREFIX/lib/libx265.a"
           test -f "$PREFIX/include/x265.h"
 
-          echo "x265 built successfully."
+          mkdir -p "$PREFIX/lib/pkgconfig"
 
+          cat > "$PREFIX/lib/pkgconfig/x265.pc" <<EOF
+          prefix=$PREFIX
+          exec_prefix=\${prefix}
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: x265
+          Description: H.265/HEVC video encoder
+          Version: 4.1
+          Libs: -L\${libdir} -lx265
+          Libs.private: -lstdc++ -lm
+          Cflags: -I\${includedir}
+          EOF
+
+          echo "x265 static library and pkg-config file created."
+          cat "$PREFIX/lib/pkgconfig/x265.pc"
       - name: Download FFmpeg source
         run: |
           set -euo pipefail
@@ -159,6 +175,9 @@ jobs:
 
           cd "$FFMPEG_SRC"
 
+          pkg-config --modversion x265
+          pkg-config --cflags --libs --static x265
+          
           ./configure \
             --prefix="$PREFIX" \
             --arch=aarch64 \
