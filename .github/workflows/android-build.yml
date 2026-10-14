@@ -200,7 +200,6 @@ jobs:
 
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
 
           cd "$FFMPEG_SRC"
 
