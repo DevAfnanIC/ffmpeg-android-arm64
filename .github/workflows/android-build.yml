@@ -104,21 +104,34 @@ jobs:
           ROOT="$RUNNER_TEMP/x265-build"
           PREFIX="$RUNNER_TEMP/deps"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
           mkdir -p "$ROOT/8bit"
+
           ln -sf ../10bit/libx265.a "$ROOT/8bit/libx265_main10.a"
           ln -sf ../12bit/libx265.a "$ROOT/8bit/libx265_main12.a"
+
           cmake -S "$SRC" -B "$ROOT/8bit" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-24 \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_INSTALL_PREFIX="$PREFIX" \
-            -DENABLE_SHARED=OFF -DENABLE_CLI=OFF -DENABLE_PIC=ON \
-            -DENABLE_ASSEMBLY=OFF -DENABLE_LIBNUMA=OFF \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DENABLE_PIC=ON \
+            -DENABLE_ASSEMBLY=OFF \
+            -DENABLE_LIBNUMA=OFF \
             -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
-            -DEXTRA_LINK_FLAGS=-L. -DLINKED_10BIT=ON -DLINKED_12BIT=ON
+            -DEXTRA_LINK_FLAGS=-L. \
+            -DLINKED_10BIT=ON \
+            -DLINKED_12BIT=ON
+
           cmake --build "$ROOT/8bit" --parallel "$BUILD_JOBS"
+
           cd "$ROOT/8bit"
           mv libx265.a libx265_main.a
+
           "$TOOLCHAIN/bin/llvm-ar" -M <<'EOF'
           CREATE libx265.a
           ADDLIB libx265_main.a
@@ -127,10 +140,33 @@ jobs:
           SAVE
           END
           EOF
+
           "$TOOLCHAIN/bin/llvm-ranlib" libx265.a
+
           install -Dm644 libx265.a "$PREFIX/lib/libx265.a"
-          install -Dm644 "$SRC/x265.h" "$PREFIX/include/x265.h"
+
+          mkdir -p "$PREFIX/include"
+
+          install -Dm644 "$SRC/x265.h" \
+            "$PREFIX/include/x265.h"
+
+          echo "=== Find generated x265_config.h ==="
+          find "$ROOT/8bit" "$ROOT/10bit" "$ROOT/12bit" \
+            -name x265_config.h -type f -print
+
+          CONFIG_HEADER="$(find "$ROOT/8bit" \
+            -name x265_config.h -type f -print -quit)"
+
+          if [ -z "$CONFIG_HEADER" ]; then
+            echo "ERROR: x265_config.h was not generated in the 8-bit build."
+            exit 1
+          fi
+
+          install -Dm644 "$CONFIG_HEADER" \
+            "$PREFIX/include/x265_config.h"
+
           mkdir -p "$PREFIX/lib/pkgconfig"
+
           cat > "$PREFIX/lib/pkgconfig/x265.pc" <<EOF
           prefix=$PREFIX
           exec_prefix=\${prefix}
@@ -144,9 +180,17 @@ jobs:
           Libs.private: -lstdc++ -lm -ldl
           Cflags: -I\${includedir}
           EOF
-          test -s "$PREFIX/lib/libx265.a"
-          "$TOOLCHAIN/bin/llvm-ar" t "$PREFIX/lib/libx265.a" | head -n 20
 
+          test -s "$PREFIX/lib/libx265.a"
+          test -s "$PREFIX/include/x265.h"
+          test -s "$PREFIX/include/x265_config.h"
+
+          echo "=== Combined x265 archive members ==="
+          "$TOOLCHAIN/bin/llvm-ar" t "$PREFIX/lib/libx265.a" \
+            | head -n 20
+
+          echo "x265 multilib archive and headers installed."
+          
       - name: Build libvpx static library
         run: |
           set -euo pipefail
