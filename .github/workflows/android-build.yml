@@ -189,6 +189,37 @@ jobs:
           tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP"
           echo "FFMPEG_SRC=$RUNNER_TEMP/ffmpeg-${FFMPEG_VERSION}" >> "$GITHUB_ENV"
 
+      - name: Diagnose x265 static linking
+        run: |
+          set -euo pipefail
+
+          DEPS="$RUNNER_TEMP/deps"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
+
+          echo "=== Archive and header ==="
+          ls -lh "$DEPS/lib/libx265.a" "$DEPS/include/x265.h"
+          "$TOOLCHAIN/bin/llvm-ar" t "$DEPS/lib/libx265.a" | head -n 20
+
+          echo "=== Compile/link x265 API test ==="
+          cat > "$RUNNER_TEMP/test-x265.c" <<'EOF'
+          #include <x265.h>
+          #include <stdint.h>
+          long check_x265_api_get(void) {
+              return (long)(intptr_t)x265_api_get;
+          }
+          int main(void) {
+              return check_x265_api_get() == 0;
+          }
+          EOF
+
+          "$CC" \
+            -I"$DEPS/include" \
+            "$RUNNER_TEMP/test-x265.c" \
+            -L"$DEPS/lib" -lx265 -lstdc++ -lm -ldl \
+            -o "$RUNNER_TEMP/test-x265"
+          echo "x265 API link test passed."
+          
       - name: Configure FFmpeg executable
         run: |
           set -euo pipefail
