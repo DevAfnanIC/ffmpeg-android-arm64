@@ -192,28 +192,55 @@ jobs:
       - name: Configure FFmpeg executable
         run: |
           set -euo pipefail
+
           PREFIX="$RUNNER_TEMP/ffmpeg-install"
           DEPS="$RUNNER_TEMP/deps"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           SYSROOT="$TOOLCHAIN/sysroot"
+
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+
           cd "$FFMPEG_SRC"
+
+          echo "=== x265 pkg-config metadata ==="
+          cat "$DEPS/lib/pkgconfig/x265.pc"
           pkg-config --modversion x265
+          pkg-config --static --cflags --libs x265
+
+          echo "=== libvpx pkg-config metadata ==="
           pkg-config --modversion vpx
+          pkg-config --static --cflags --libs vpx
+
           ./configure \
-            --prefix="$PREFIX" --arch=aarch64 --target-os=android \
-            --enable-cross-compile --sysroot="$SYSROOT" \
+            --prefix="$PREFIX" \
+            --arch=aarch64 \
+            --target-os=android \
+            --enable-cross-compile \
+            --sysroot="$SYSROOT" \
             --cc="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" \
             --cxx="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++" \
-            --ar="$TOOLCHAIN/bin/llvm-ar" --ranlib="$TOOLCHAIN/bin/llvm-ranlib" \
-            --nm="$TOOLCHAIN/bin/llvm-nm" --strip="$TOOLCHAIN/bin/llvm-strip" \
-            --pkg-config=pkg-config --pkg-config-flags=--static \
-            --extra-cflags="-I$DEPS/include" --extra-ldflags="-L$DEPS/lib" \
-            --enable-gpl --enable-libx264 --enable-libx265 --enable-libvpx \
-            --enable-static --disable-shared --enable-pic \
-            --disable-ffplay --disable-ffprobe --disable-doc --disable-debug \
+            --ar="$TOOLCHAIN/bin/llvm-ar" \
+            --ranlib="$TOOLCHAIN/bin/llvm-ranlib" \
+            --nm="$TOOLCHAIN/bin/llvm-nm" \
+            --strip="$TOOLCHAIN/bin/llvm-strip" \
+            --pkg-config=pkg-config \
+            --pkg-config-flags=--static \
+            --extra-cflags="-I$DEPS/include" \
+            --extra-ldflags="-L$DEPS/lib" \
+            --extra-libs="-lstdc++ -lm -ldl" \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-libvpx \
+            --enable-static \
+            --disable-shared \
+            --enable-pic \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-doc \
+            --disable-debug \
             --disable-autodetect
 
       - name: Compile FFmpeg executable
