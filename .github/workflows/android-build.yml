@@ -1,5 +1,4 @@
-
-name: FFmpeg Android ARM64 Executable
+name: Build FFmpeg Android ARM64
 
 on:
   workflow_dispatch:
@@ -21,293 +20,341 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install host tools
+      - name: Install build tools
         run: |
           set -euo pipefail
+
           sudo apt-get update
-          sudo apt-get install -y curl unzip xz-utils make perl cmake ninja-build nasm git pkg-config python3
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            build-essential \
+            cmake \
+            curl \
+            git \
+            libtool \
+            ninja-build \
+            pkg-config \
+            python3 \
+            texinfo \
+            yasm \
+            nasm \
+            xz-utils \
+            zlib1g-dev
 
-      - name: Download Android NDK
+      - name: Install Android NDK
         run: |
           set -euo pipefail
-          curl -fL --retry 3 https://dl.google.com/android/repository/android-ndk-r27d-linux.zip -o "$RUNNER_TEMP/ndk.zip"
-          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
-          echo "NDK=$RUNNER_TEMP/android-ndk-r27d" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/android-ndk-r27d/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Android toolchain
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "NDK=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up Android toolchain
         run: |
           set -euo pipefail
-          aarch64-linux-android24-clang --version
-          llvm-ar --version
-          llvm-ranlib --version
-          llvm-strings --version
 
-      - name: Build x264 static library
-        run: |
-          set -euo pipefail
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          PREFIX="$RUNNER_TEMP/deps"
-          CROSS="$TOOLCHAIN/bin/aarch64-linux-android-"
+
+          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+          echo "SYSROOT=$TOOLCHAIN/sysroot" >> "$GITHUB_ENV"
+          echo "CC=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" >> "$GITHUB_ENV"
+          echo "CXX=$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++" >> "$GITHUB_ENV"
+          echo "AR=$TOOLCHAIN/bin/llvm-ar" >> "$GITHUB_ENV"
+          echo "RANLIB=$TOOLCHAIN/bin/llvm-ranlib" >> "$GITHUB_ENV"
+          echo "STRIP=$TOOLCHAIN/bin/llvm-strip" >> "$GITHUB_ENV"
+          echo "PREFIX=$RUNNER_TEMP/android-arm64" >> "$GITHUB_ENV"
+          echo "DEPS=$RUNNER_TEMP/deps" >> "$GITHUB_ENV"
+
+      - name: Create build directories
+        run: |
+          set -euo pipefail
+
           mkdir -p "$PREFIX"
-          for tool in ar ranlib strip nm strings; do
-            ln -sf "$TOOLCHAIN/bin/llvm-$tool" "${CROSS}${tool}"
-          done
-          export CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
-          export AS="$CC"
-          export AR="${CROSS}ar" RANLIB="${CROSS}ranlib" STRIP="${CROSS}strip"
-          git clone --depth 1 https://github.com/mirror/x264.git "$RUNNER_TEMP/x264"
+          mkdir -p "$DEPS/lib/pkgconfig"
+          mkdir -p "$DEPS/include"
+
+      - name: Build x264
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git \
+            "$RUNNER_TEMP/x264"
+
           cd "$RUNNER_TEMP/x264"
-          ./configure --prefix="$PREFIX" --host=aarch64-linux --cross-prefix="$CROSS" --cc="$CC" --as="$AS" --sysroot="$TOOLCHAIN/sysroot" --enable-static --enable-pic --disable-cli --disable-opencl
+
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          CROSS="$TOOLCHAIN/bin/aarch64-linux-android-"
+
+          ln -sf "${CROSS}ar" "$RUNNER_TEMP/aarch64-linux-android-ar"
+          ln -sf "${CROSS}ranlib" "$RUNNER_TEMP/aarch64-linux-android-ranlib"
+          ln -sf "${CROSS}strip" "$RUNNER_TEMP/aarch64-linux-android-strip"
+          ln -sf "${CROSS}nm" "$RUNNER_TEMP/aarch64-linux-android-nm"
+          ln -sf "${CROSS}strings" "$RUNNER_TEMP/aarch64-linux-android-strings"
+
+          export PATH="$RUNNER_TEMP:$TOOLCHAIN/bin:$PATH"
+
+          ./configure \
+            --prefix="$DEPS" \
+            --host=aarch64-linux \
+            --cross-prefix="$CROSS" \
+            --cc="$CC" \
+            --sysroot="$SYSROOT" \
+            --enable-static \
+            --enable-pic \
+            --disable-shared \
+            --disable-cli \
+            --disable-opencl
+
           make -j"$BUILD_JOBS"
           make install
-          test -s "$PREFIX/lib/libx264.a"
 
-      - name: Download x265 source
+      - name: Build x265 8-bit, 10-bit and 12-bit
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/videolan/x265.git "$RUNNER_TEMP/x265"
 
-      - name: Build x265 10-bit static library
-        run: |
-          set -euo pipefail
-          SRC="$RUNNER_TEMP/x265/source"
-          BUILD="$RUNNER_TEMP/x265-build/10bit"
-          cmake -S "$SRC" -B "$BUILD" -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_STL=c++_static \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DENABLE_SHARED=OFF \
-            -DENABLE_CLI=OFF \
-            -DENABLE_PIC=ON \
-            -DENABLE_ASSEMBLY=OFF \
-            -DENABLE_LIBNUMA=OFF \
-            -DHIGH_BIT_DEPTH=ON \
-            -DEXPORT_C_API=OFF
-          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
-          test -s "$BUILD/libx265.a"
+          git clone --depth 1 --branch 4.1 \
+            https://bitbucket.org/multicoreware/x265_git.git \
+            "$RUNNER_TEMP/x265"
 
-      - name: Build x265 12-bit static library
-        run: |
-          set -euo pipefail
-          SRC="$RUNNER_TEMP/x265/source"
-          BUILD="$RUNNER_TEMP/x265-build/12bit"
-          cmake -S "$SRC" -B "$BUILD" -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_STL=c++_static \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DENABLE_SHARED=OFF \
-            -DENABLE_CLI=OFF \
-            -DENABLE_PIC=ON \
-            -DENABLE_ASSEMBLY=OFF \
-            -DENABLE_LIBNUMA=OFF \
-            -DHIGH_BIT_DEPTH=ON \
-            -DEXPORT_C_API=OFF \
-            -DMAIN12=ON
-          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
-          test -s "$BUILD/libx265.a"
-
-      - name: Build and combine x265 8-bit multilib
-        run: |
-          set -euo pipefail
-          SRC="$RUNNER_TEMP/x265/source"
-          ROOT="$RUNNER_TEMP/x265-build"
-          PREFIX="$RUNNER_TEMP/deps"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          X265_SOURCE="$RUNNER_TEMP/x265/source"
+          X265_BUILD="$RUNNER_TEMP/x265-build"
 
-          mkdir -p "$ROOT/8bit"
-          ln -sf ../10bit/libx265.a "$ROOT/8bit/libx265_main10.a"
-          ln -sf ../12bit/libx265.a "$ROOT/8bit/libx265_main12.a"
-
-          cmake -S "$SRC" -B "$ROOT/8bit" -G Ninja \
+          cmake -S "$X265_SOURCE" -B "$X265_BUILD/10bit" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DANDROID_STL=c++_static \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF \
-            -DENABLE_PIC=ON \
-            -DENABLE_ASSEMBLY=OFF \
-            -DENABLE_LIBNUMA=OFF \
-            -DEXTRA_LIB="x265_main10.a;x265_main12.a" \
-            -DEXTRA_LINK_FLAGS=-L. \
-            -DLINKED_10BIT=ON \
-            -DLINKED_12BIT=ON
+            -DHIGH_BIT_DEPTH=ON \
+            -DMAIN12=OFF \
+            -DEXPORT_C_API=OFF
 
-          cmake --build "$ROOT/8bit" --parallel "$BUILD_JOBS"
+          cmake --build "$X265_BUILD/10bit" --parallel "$BUILD_JOBS"
 
-          cd "$ROOT/8bit"
-          mv libx265.a libx265_main.a
+          cmake -S "$X265_SOURCE" -B "$X265_BUILD/12bit" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DHIGH_BIT_DEPTH=ON \
+            -DMAIN12=ON \
+            -DEXPORT_C_API=OFF
 
-          "$TOOLCHAIN/bin/llvm-ar" -M <<'EOF'
-          CREATE libx265.a
-          ADDLIB libx265_main.a
-          ADDLIB libx265_main10.a
-          ADDLIB libx265_main12.a
-          SAVE
-          END
-          EOF
+          cmake --build "$X265_BUILD/12bit" --parallel "$BUILD_JOBS"
 
-          "$TOOLCHAIN/bin/llvm-ranlib" libx265.a
-          install -Dm644 libx265.a "$PREFIX/lib/libx265.a"
+          cmake -S "$X265_SOURCE" -B "$X265_BUILD/8bit" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DENABLE_SHARED=OFF \
+            -DENABLE_CLI=OFF \
+            -DHIGH_BIT_DEPTH=OFF \
+            -DMAIN12=OFF \
+            -DEXPORT_C_API=ON \
+            -D LINKED_10BIT=ON \
+            -D LINKED_12BIT=ON \
+            -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
+            -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
-          mkdir -p "$PREFIX/include"
-          install -Dm644 "$SRC/x265.h" "$PREFIX/include/x265.h"
+          cmake --build "$X265_BUILD/8bit" --parallel "$BUILD_JOBS"
 
-          CONFIG_HEADER="$(find "$ROOT/8bit" -name x265_config.h -type f -print -quit)"
-          if [ -z "$CONFIG_HEADER" ]; then
-            echo "ERROR: x265_config.h was not generated in the 8-bit build."
-            exit 1
-          fi
-          install -Dm644 "$CONFIG_HEADER" "$PREFIX/include/x265_config.h"
+          mkdir -p "$DEPS/lib"
+          cp "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
+          cp "$X265_SOURCE/x265.h" "$DEPS/include/"
 
-          mkdir -p "$PREFIX/lib/pkgconfig"
-          cat > "$PREFIX/lib/pkgconfig/x265.pc" <<EOF
-          prefix=$PREFIX
+          cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
+          prefix=$DEPS
           exec_prefix=\${prefix}
           libdir=\${prefix}/lib
           includedir=\${prefix}/include
 
           Name: x265
-          Description: H.265/HEVC multilib encoder
+          Description: H.265/HEVC video encoder
           Version: 4.1
           Libs: -L\${libdir} -lx265
-          Libs.private: -lm -ldl
+          Libs.private: -lstdc++ -lm -ldl
           Cflags: -I\${includedir}
           EOF
 
-          test -s "$PREFIX/lib/libx265.a"
-          test -s "$PREFIX/include/x265.h"
-          test -s "$PREFIX/include/x265_config.h"
-
-          echo "=== Combined x265 archive members ==="
-          "$TOOLCHAIN/bin/llvm-ar" t "$PREFIX/lib/libx265.a" | head -n 20
-          echo "x265 multilib archive and headers installed."
-
-      - name: Build libvpx static library
+      - name: Build libvpx
         run: |
           set -euo pipefail
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          PREFIX="$RUNNER_TEMP/deps"
-          git clone --depth 1 https://chromium.googlesource.com/webm/libvpx "$RUNNER_TEMP/libvpx"
+
+          git clone --depth 1 --branch v1.15.2 \
+            https://chromium.googlesource.com/webm/libvpx \
+            "$RUNNER_TEMP/libvpx"
+
           cd "$RUNNER_TEMP/libvpx"
+
+          ./configure \
+            --prefix="$DEPS" \
+            --target=arm64-android-gcc \
+            --disable-examples \
+            --disable-tools \
+            --disable-docs \
+            --disable-unit-tests \
+            --disable-shared \
+            --enable-static \
+            --enable-pic \
+            --enable-vp8 \
+            --enable-vp9 \
+            --disable-webm-io \
+            --disable-libyuv
+
+          make -j"$BUILD_JOBS"
+          make install
+
+      - name: Build audio libraries
+        run: |
+          set -euo pipefail
+
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
           export CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
           export CXX="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
           export AR="$TOOLCHAIN/bin/llvm-ar"
-          export AS="$CC"
-          export LD="$CXX"
-          export STRIP="$TOOLCHAIN/bin/llvm-strip"
           export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
-          ./configure --target=arm64-android-gcc --prefix="$PREFIX" \
-            --disable-examples --disable-tools --disable-docs \
-            --disable-unit-tests --disable-webm-io --enable-pic \
-            --enable-vp8 --enable-vp9 --enable-static --disable-shared
-          make -j"$BUILD_JOBS"
-          make install
-          test -s "$PREFIX/lib/libvpx.a"
-          test -f "$PREFIX/include/vpx/vpx_encoder.h"
-          mkdir -p "$PREFIX/lib/pkgconfig"
-          cat > "$PREFIX/lib/pkgconfig/vpx.pc" <<EOF
-          prefix=$PREFIX
-          libdir=\${prefix}/lib
-          includedir=\${prefix}/include
-
-          Name: vpx
-          Description: VP8 and VP9 codec library
-          Version: 1.15.2
-          Libs: -L\${libdir} -lvpx
-          Cflags: -I\${includedir}
-          EOF
-
-      - name: Download FFmpeg source
-        run: |
-          set -euo pipefail
-          curl -fL --retry 3 "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz" -o "$RUNNER_TEMP/ffmpeg.tar.xz"
-          tar -xJf "$RUNNER_TEMP/ffmpeg.tar.xz" -C "$RUNNER_TEMP"
-          echo "FFMPEG_SRC=$RUNNER_TEMP/ffmpeg-${FFMPEG_VERSION}" >> "$GITHUB_ENV"
-
-      - name: Diagnose x265 static linking
-        run: |
-          set -euo pipefail
-          DEPS="$RUNNER_TEMP/deps"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          CC="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
-
-          echo "=== Archive and headers ==="
-          ls -lh "$DEPS/lib/libx265.a" "$DEPS/include/x265.h" "$DEPS/include/x265_config.h"
-          "$TOOLCHAIN/bin/llvm-ar" t "$DEPS/lib/libx265.a" | head -n 20
-
-          echo "=== Compile/link x265 API test ==="
-          cat > "$RUNNER_TEMP/test-x265.c" <<'EOF'
-          #include <x265.h>
-          #include <stdint.h>
-          long check_x265_api_get(void) {
-              return (long)(intptr_t)x265_api_get;
-          }
-          int main(void) {
-              return check_x265_api_get() == 0;
-          }
-          EOF
-
-          "$CC" \
-            -I"$DEPS/include" \
-            "$RUNNER_TEMP/test-x265.c" \
-            -L"$DEPS/lib" -lx265 -lc++ -lm -ldl \
-            -o "$RUNNER_TEMP/test-x265"
-          echo "x265 API link test passed."
-
-      - name: Configure FFmpeg executable
-        run: |
-          set -euo pipefail
-          PREFIX="$RUNNER_TEMP/ffmpeg-install"
-          DEPS="$RUNNER_TEMP/deps"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          SYSROOT="$TOOLCHAIN/sysroot"
-
+          export STRIP="$TOOLCHAIN/bin/llvm-strip"
+          export CFLAGS="-O2 -fPIC"
+          export CXXFLAGS="-O2 -fPIC"
+          export CPPFLAGS="-I$DEPS/include"
+          export LDFLAGS="-L$DEPS/lib"
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
 
-          cd "$FFMPEG_SRC"
+          build_autotools() {
+            local name="$1"
+            local url="$2"
+            local configure_args="$3"
+            local src="$RUNNER_TEMP/$name"
 
-          echo "=== x265 pkg-config metadata ==="
-          cat "$DEPS/lib/pkgconfig/x265.pc"
-          pkg-config --modversion x265
-          pkg-config --static --cflags --libs x265
+            mkdir -p "$src"
 
-          echo "=== libvpx pkg-config metadata ==="
-          pkg-config --modversion vpx
-          pkg-config --static --cflags --libs vpx
+            curl -fL --retry 3 "$url" -o "$RUNNER_TEMP/$name.tar.gz"
+
+            tar -xzf "$RUNNER_TEMP/$name.tar.gz" \
+              --strip-components=1 \
+              -C "$src"
+
+            cd "$src"
+
+            ./configure \
+              --host=aarch64-linux-android \
+              --prefix="$DEPS" \
+              --enable-static \
+              --disable-shared \
+              $configure_args
+
+            make -j"$BUILD_JOBS"
+            make install
+          }
+
+          build_autotools opus \
+            https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz \
+            "--disable-doc --disable-extra-programs"
+
+          build_autotools libogg \
+            https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz \
+            "--disable-examples --disable-oggtest"
+
+          build_autotools libvorbis \
+            https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz \
+            "--disable-examples --disable-oggtest"
+
+          build_autotools lame \
+            https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz \
+            "--disable-frontend"
+
+          build_autotools twolame \
+            https://downloads.sourceforge.net/project/twolame/twolame/0.4.0/twolame-0.4.0.tar.gz \
+            "--disable-frontend"
+
+          build_autotools speex \
+            https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz \
+            "--disable-binaries --disable-examples"
+
+          git clone --depth 1 --branch 0.1.3 \
+            https://github.com/chirlu/soxr.git \
+            "$RUNNER_TEMP/soxr"
+
+          cmake -S "$RUNNER_TEMP/soxr" -B "$RUNNER_TEMP/soxr-build" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWITH_OPENMP=OFF \
+            -DBUILD_TESTS=OFF
+
+          cmake --build "$RUNNER_TEMP/soxr-build" --parallel "$BUILD_JOBS"
+          cmake --install "$RUNNER_TEMP/soxr-build"
+
+          echo "=== Installed audio libraries ==="
+          find "$DEPS/lib" -maxdepth 2 \
+            \( -name '*.a' -o -name '*.pc' \) -print | sort
+
+          test -s "$DEPS/lib/libopus.a"
+          test -s "$DEPS/lib/libogg.a"
+          test -s "$DEPS/lib/libvorbis.a"
+          test -s "$DEPS/lib/libvorbisenc.a"
+          test -s "$DEPS/lib/libmp3lame.a"
+          test -s "$DEPS/lib/libtwolame.a"
+          test -s "$DEPS/lib/libspeex.a"
+          test -s "$DEPS/lib/libsoxr.a"
+
+      - name: Configure FFmpeg
+        run: |
+          set -euo pipefail
+
+          git clone --depth 1 --branch "n${FFMPEG_VERSION}" \
+            https://git.ffmpeg.org/ffmpeg.git \
+            "$RUNNER_TEMP/ffmpeg"
+
+          cd "$RUNNER_TEMP/ffmpeg"
+
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export CFLAGS="-O2 -fPIC -I$DEPS/include"
+          export LDFLAGS="-L$DEPS/lib"
+          export LIBS="-lc++ -lm -ldl"
 
           ./configure \
             --prefix="$PREFIX" \
-            --arch=aarch64 \
             --target-os=android \
+            --arch=aarch64 \
+            --cpu=armv8-a \
             --enable-cross-compile \
             --sysroot="$SYSROOT" \
-            --cc="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang" \
-            --cxx="$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++" \
-            --ar="$TOOLCHAIN/bin/llvm-ar" \
-            --ranlib="$TOOLCHAIN/bin/llvm-ranlib" \
-            --nm="$TOOLCHAIN/bin/llvm-nm" \
-            --strip="$TOOLCHAIN/bin/llvm-strip" \
-            --pkg-config=pkg-config \
-            --pkg-config-flags=--static \
-            --extra-cflags="-I$DEPS/include" \
-            --extra-ldflags="-L$DEPS/lib" \
-            --extra-libs="-lc++ -lm -ldl" \
+            --cc="$CC" \
+            --cxx="$CXX" \
+            --ar="$AR" \
+            --ranlib="$RANLIB" \
+            --strip="$STRIP" \
             --enable-gpl \
             --enable-libx264 \
             --enable-libx265 \
             --enable-libvpx \
+            --enable-libopus \
+            --enable-libvorbis \
+            --enable-libmp3lame \
+            --enable-libtwolame \
+            --enable-libspeex \
+            --enable-libsoxr \
             --enable-static \
             --disable-shared \
             --enable-pic \
@@ -315,100 +362,93 @@ jobs:
             --disable-ffprobe \
             --disable-doc \
             --disable-debug \
-            --disable-autodetect
+            --disable-autodetect \
+            --extra-cflags="-I$DEPS/include -O2 -fPIC" \
+            --extra-ldflags="-L$DEPS/lib" \
+            --extra-libs="-lc++ -lm -ldl"
 
-      - name: Compile FFmpeg executable
+      - name: Build FFmpeg
         run: |
           set -euo pipefail
-          cd "$FFMPEG_SRC"
+
+          cd "$RUNNER_TEMP/ffmpeg"
+
           make -j"$BUILD_JOBS"
           make install
-          test -x "$RUNNER_TEMP/ffmpeg-install/bin/ffmpeg"
 
-      - name: Verify executable and codec configuration
+      - name: Verify FFmpeg configuration
         run: |
           set -euo pipefail
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          FFMPEG="$RUNNER_TEMP/ffmpeg-install/bin/ffmpeg"
-          test -s "$FFMPEG"
-          "$TOOLCHAIN/llvm-readelf" -h "$FFMPEG" | tee "$RUNNER_TEMP/elf-header.txt"
-          grep -q AArch64 "$RUNNER_TEMP/elf-header.txt"
 
-          for codec in LIBX264 LIBX265 LIBVPX; do
-            grep -q "^#define CONFIG_${codec} 1$" "$FFMPEG_SRC/config.h"
+          cd "$RUNNER_TEMP/ffmpeg"
+
+          echo "=== External library configuration ==="
+          grep -E 'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)=' config.h || true
+
+          echo "=== Encoders ==="
+          "$PREFIX/bin/ffmpeg" -hide_banner -encoders
+
+          echo "=== Decoders ==="
+          "$PREFIX/bin/ffmpeg" -hide_banner -decoders
+
+          for encoder in \
+            libx264 \
+            libx265 \
+            libvpx_vp8 \
+            libvpx_vp9 \
+            libopus \
+            libvorbis \
+            libmp3lame \
+            libtwolame; do
+            "$PREFIX/bin/ffmpeg" -hide_banner -h "encoder=$encoder" >/dev/null
           done
 
-          for encoder in LIBX264_ENCODER LIBX265_ENCODER LIBVPX_VP8_ENCODER LIBVPX_VP9_ENCODER; do
-            grep -q "^CONFIG_${encoder}=yes$" "$FFMPEG_SRC/ffbuild/config.mak"
-          done
+          "$PREFIX/bin/ffmpeg" -hide_banner -h decoder=libspeex >/dev/null
 
-          for decoder in LIBVPX_VP8_DECODER LIBVPX_VP9_DECODER; do
-            grep -q "^CONFIG_${decoder}=yes$" "$FFMPEG_SRC/ffbuild/config.mak"
-          done
-
-          echo "=== Executable dynamic dependencies ==="
-          "$TOOLCHAIN/llvm-readelf" -d "$FFMPEG" | tee "$RUNNER_TEMP/dynamic-section.txt"
-
-          echo "=== C++ runtime dependencies ==="
-          if grep -q 'libc++_shared.so' "$RUNNER_TEMP/dynamic-section.txt"; then
-            echo "Executable needs libc++_shared.so; it will be bundled."
-          else
-            echo "No direct libc++_shared.so dependency detected."
-          fi
-
-          echo "SUCCESS: ARM64 executable and codec registrations verified."
-
-      - name: Package executable and C++ runtime
+      - name: Package Android ARM64 build
         run: |
           set -euo pipefail
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-          PACKAGE="$RUNNER_TEMP/package"
-          FFMPEG="$RUNNER_TEMP/ffmpeg-install/bin/ffmpeg"
-          RUNTIME="$TOOLCHAIN/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
 
-          test -s "$FFMPEG"
-          mkdir -p "$PACKAGE/lib"
-          cp "$FFMPEG" "$PACKAGE/ffmpeg"
-          chmod +x "$PACKAGE/ffmpeg"
+          mkdir -p "$RUNNER_TEMP/package/bin"
+          mkdir -p "$RUNNER_TEMP/package/lib"
 
-          if "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" | grep -q 'libc++_shared.so'; then
-            test -s "$RUNTIME"
-            cp "$RUNTIME" "$PACKAGE/lib/libc++_shared.so"
-          fi
+          cp "$PREFIX/bin/ffmpeg" "$RUNNER_TEMP/package/bin/ffmpeg"
 
-          cat > "$PACKAGE/run-ffmpeg.sh" <<'EOF'
-          #!/data/data/com.termux/files/usr/bin/sh
-          set -eu
+          cat > "$RUNNER_TEMP/package/run-ffmpeg.sh" <<'EOF'
+          #!/system/bin/sh
           HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-          if [ -d "$HERE/lib" ]; then
-            export LD_LIBRARY_PATH="$HERE/lib"
-          fi
-          exec "$HERE/ffmpeg" "$@"
-          EOF
-          chmod +x "$PACKAGE/run-ffmpeg.sh"
-
-          cat > "$PACKAGE/README.txt" <<'EOF'
-          FFmpeg 9.0.2 Android ARM64 executable
-          Target ABI: arm64-v8a
-          Minimum Android API: 24
-          Built with external libx264, multilib libx265 (8/10/12-bit), and libvpx (VP8/VP9).
-
-          In Termux, extract this archive and run:
-            chmod +x ffmpeg run-ffmpeg.sh
-            ./run-ffmpeg.sh -hide_banner -encoders
-
-          The launcher adds only the bundled runtime directory to LD_LIBRARY_PATH.
-          Do not set LD_LIBRARY_PATH to the entire Termux $PREFIX/lib directory for this executable.
-          Codec registration does not replace on-device functional testing.
+          export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "$HERE/bin/ffmpeg" "$@"
           EOF
 
-          tar -czf "$RUNNER_TEMP/ffmpeg-9.0.2-android-arm64-executable.tar.gz" -C "$PACKAGE" .
+          chmod +x "$RUNNER_TEMP/package/run-ffmpeg.sh"
 
-      - name: Upload FFmpeg executable
+          cat > "$RUNNER_TEMP/package/README.txt" <<EOF
+          FFmpeg ${FFMPEG_VERSION} Android ARM64
+
+          Architecture: ARM64 / aarch64
+          Minimum Android API: ${ANDROID_API}
+
+          Run in Termux:
+            chmod +x run-ffmpeg.sh
+            ./run-ffmpeg.sh -version
+            ./run-ffmpeg.sh -encoders
+            ./run-ffmpeg.sh -decoders
+
+          Included external libraries:
+            x264, x265, libvpx, Opus, Vorbis, MP3 LAME,
+            TwoLAME, Speex, SoXR.
+
+          This is a statically linked FFmpeg executable.
+          EOF
+
+          cd "$RUNNER_TEMP"
+          tar -czf ffmpeg-android-arm64.tar.gz package
+
+      - name: Upload FFmpeg artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-9.0.2-android-arm64-executable
-          path: ${{ runner.temp }}/ffmpeg-9.0.2-android-arm64-executable.tar.gz
+          name: ffmpeg-android-arm64
+          path: ${{ runner.temp }}/ffmpeg-android-arm64.tar.gz
           if-no-files-found: error
           retention-days: 14
-          
