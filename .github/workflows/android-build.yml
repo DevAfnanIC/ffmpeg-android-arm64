@@ -83,29 +83,25 @@ jobs:
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CROSS="$RUNNER_TEMP/aarch64-linux-android-"
 
-          mkdir -p "$RUNNER_TEMP/x264-tools"
-          export PATH="$RUNNER_TEMP/x264-tools:$TOOLCHAIN/bin:$PATH"
-
-          # Map the cross-tool names expected by x264 to NDK tools.
+          # Create the cross-tool names directly where x264 expects them.
           for tool in ar ranlib strip nm strings; do
             ln -sf "$TOOLCHAIN/bin/llvm-$tool" \
-              "$RUNNER_TEMP/x264-tools/aarch64-linux-android-$tool"
+              "${CROSS}${tool}"
           done
 
-          # x264 expects a compiler with the cross-prefix name.
-          cat > "$RUNNER_TEMP/x264-tools/aarch64-linux-android-gcc" <<EOF
+          cat > "${CROSS}gcc" <<EOF
           #!/bin/sh
           exec "$CC" "\$@"
           EOF
 
-          cat > "$RUNNER_TEMP/x264-tools/aarch64-linux-android-g++" <<EOF
+          cat > "${CROSS}g++" <<EOF
           #!/bin/sh
           exec "$CXX" "\$@"
           EOF
 
-          chmod +x \
-            "$RUNNER_TEMP/x264-tools/aarch64-linux-android-gcc" \
-            "$RUNNER_TEMP/x264-tools/aarch64-linux-android-g++"
+          chmod +x "${CROSS}gcc" "${CROSS}g++"
+
+          export PATH="$RUNNER_TEMP:$TOOLCHAIN/bin:$PATH"
 
           cd "$RUNNER_TEMP/x264"
 
