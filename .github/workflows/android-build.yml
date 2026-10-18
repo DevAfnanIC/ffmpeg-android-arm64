@@ -123,8 +123,8 @@ jobs:
           test -s "$DEPS/lib/libx264.a"
           test -s "$DEPS/include/x264.h"
 
-
       - name: Build x265 8-bit, 10-bit and 12-bit
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -136,9 +136,8 @@ jobs:
           X265_BUILD="$RUNNER_TEMP/x265-build"
           TARGET="aarch64-linux-android${ANDROID_API}"
 
-          # Patch x265's custom ARM assembly compiler command.
-          # It invokes CMAKE_CXX_COMPILER directly, so the target must
-          # be included explicitly in the ARGS passed to that command.
+          # Construct dollar signs dynamically so GitHub Actions
+          # does not interpret CMake variables as workflow expressions.
           python3 - "$X265_SOURCE/CMakeLists.txt" "$TARGET" <<'PY'
           import pathlib
           import sys
@@ -147,8 +146,9 @@ jobs:
           target = sys.argv[2]
           content = path.read_text()
 
-          old = "ARGS ${ARM_ARGS} -c ${ASM_SRC} -o ${ASM}.${SUFFIX}"
-          new = f"ARGS --target={target} ${{ARM_ARGS}} -c ${{ASM_SRC}} -o ${{ASM}}.${{SUFFIX}}"
+          d = chr(36)
+          old = f"ARGS {d}{{ARM_ARGS}} -c {d}{{ASM_SRC}} -o {d}{{ASM}}.{d}{{SUFFIX}}"
+          new = f"ARGS --target={target} {d}{{ARM_ARGS}} -c {d}{{ASM_SRC}} -o {d}{{ASM}}.{d}{{SUFFIX}}"
 
           if new in content:
               print("Android ARM64 assembly target patch already exists.")
@@ -163,7 +163,7 @@ jobs:
               )
 
           verify = path.read_text()
-          if f"ARGS --target={target} ${{ARM_ARGS}}" not in verify:
+          if new not in verify:
               raise SystemExit("ERROR: Failed to verify x265 target patch.")
           PY
 
