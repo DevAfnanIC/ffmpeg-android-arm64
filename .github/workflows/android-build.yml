@@ -1,3 +1,4 @@
+
 name: Build FFmpeg Android ARM64
 
 on:
@@ -83,14 +84,11 @@ jobs:
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CROSS="$RUNNER_TEMP/aarch64-linux-android-"
 
-          # Map the tools x264's configure script expects to NDK tools.
           for tool in ar ranlib strip nm; do
             test -x "$TOOLCHAIN/bin/llvm-$tool"
             ln -sf "$TOOLCHAIN/bin/llvm-$tool" "${CROSS}${tool}"
           done
 
-          # x264 checks for a strings utility. Use the host utility for
-          # configure-time inspection; this tool does not generate target code.
           ln -sf "$(command -v strings)" "${CROSS}strings"
 
           cat > "${CROSS}gcc" <<EOF
@@ -136,14 +134,44 @@ jobs:
 
           X265_SOURCE="$RUNNER_TEMP/x265/source"
           X265_BUILD="$RUNNER_TEMP/x265-build"
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           TARGET="aarch64-linux-android${ANDROID_API}"
+
+          # FIX: x265 invokes the compiler directly for some ARM assembly
+          # files. Add the Android target to ARM_ARGS so these commands
+          # do not default to the host x86_64 target.
+          python3 - "$X265_SOURCE/CMakeLists.txt" "$TARGET" <<'PY'
+          import pathlib
+          import sys
+
+          cmake_file = pathlib.Path(sys.argv[1])
+          target = sys.argv[2]
+          content = cmake_file.read_text()
+
+          old = "set(ARM_ARGS -fPIC)"
+          new = f"set(ARM_ARGS --target={target} -fPIC)"
+
+          if old not in content:
+              if new in content:
+                  print("x265 ARM_ARGS target patch is already present.")
+              else:
+                  raise SystemExit(
+                      "ERROR: Could not find the expected x265 ARM_ARGS line. "
+                      "Inspect source/CMakeLists.txt before continuing."
+                  )
+          else:
+              content = content.replace(old, new, 1)
+              cmake_file.write_text(content)
+              print(f"Patched x265 ARM assembly target: {target}")
+
+          if new not in cmake_file.read_text():
+              raise SystemExit("ERROR: x265 ARM_ARGS patch verification failed.")
+          PY
+
+          grep -n 'set(ARM_ARGS' "$X265_SOURCE/CMakeLists.txt"
 
           rm -rf "$X265_BUILD"
           mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
 
-          # Use NDK API-specific compiler drivers. Do not inject host-target
-          # compiler settings into CMake's ASM language configuration.
           build_x265_variant() {
             local variant="$1"
             shift
@@ -167,19 +195,20 @@ jobs:
             cmake --build "$X265_BUILD/$variant" --parallel "$BUILD_JOBS"
           }
 
-          # Build 10-bit and 12-bit variants without exporting their C API.
+          # Build 10-bit variant without exporting its public C API.
           build_x265_variant 10bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=OFF \
             -DEXPORT_C_API=OFF
 
+          # Build 12-bit variant without exporting its public C API.
           build_x265_variant 12bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=ON \
             -DEXPORT_C_API=OFF
 
-          # Build the 8-bit public library with both high-bit-depth libraries
-          # linked into the combined archive.
+          # Build the public 8-bit library with both high-bit-depth
+          # variants linked into the combined archive.
           build_x265_variant 8bit \
             -DHIGH_BIT_DEPTH=OFF \
             -DMAIN12=OFF \
@@ -460,9 +489,6 @@ jobs:
 
           cp "$FFMPEG" "$PACKAGE/bin/ffmpeg"
 
-          # Bundle any shared libraries required by the executable.
-          # Static archives are preferred; this handles any remaining NEEDED
-          # entries that resolve to shared objects in the NDK sysroot.
           NEEDED="$RUNNER_TEMP/ffmpeg-needed.txt"
           "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" \
             | sed -n 's/.*Shared library: \[\(.*\)\].*/\1/p' > "$NEEDED"
@@ -472,8 +498,6 @@ jobs:
 
             case "$lib" in
               libc.so|libm.so|libdl.so|liblog.so|libandroid.so|libz.so|libc++_shared.so)
-                # Android system libraries are supplied by the OS.
-                # libc++_shared.so is handled separately below if required.
                 if [ "$lib" = "libc++_shared.so" ]; then
                   find "$TOOLCHAIN/sysroot" -name "$lib" -type f -print -quit \
                     | while IFS= read -r path; do cp "$path" "$PACKAGE/lib/"; done
@@ -531,3 +555,4 @@ jobs:
           path: ${{ runner.temp }}/ffmpeg-android-arm64.tar.gz
           if-no-files-found: error
           retention-days: 14
+          
