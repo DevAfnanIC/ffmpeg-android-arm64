@@ -123,6 +123,7 @@ jobs:
           test -s "$DEPS/lib/libx264.a"
           test -s "$DEPS/include/x264.h"
 
+
       - name: Build x265 8-bit, 10-bit and 12-bit
         shell: bash
         run: |
@@ -135,34 +136,49 @@ jobs:
           X265_SOURCE="$RUNNER_TEMP/x265/source"
           X265_BUILD="$RUNNER_TEMP/x265-build"
           TARGET="aarch64-linux-android${ANDROID_API}"
-          WRAPPER_DIR="$RUNNER_TEMP/x265-tools"
 
-          mkdir -p "$WRAPPER_DIR"
-
-          # The wrapper adds the Android target even when x265's
-          # custom assembly rules invoke clang++ directly.
-          cat > "$WRAPPER_DIR/clang++" <<'WRAPPER'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          exec "$REAL_CXX" --target="$TARGET" "$@"
-          WRAPPER
-
-          chmod +x "$WRAPPER_DIR/clang++"
-
-          export REAL_CXX="$CXX"
-          export TARGET
-          export PATH="$WRAPPER_DIR:$PATH"
-
-          # Verify that the wrapper selects the Android ARM64 target.
-          "$WRAPPER_DIR/clang++" -### -march=armv8-a -x c++ -c /dev/null \
-            2>&1 | grep -F "aarch64"
-
-          rm -rf "$X265_BUILD"
           mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
+
+          # Patch x265's custom ARM assembly commands. These commands
+          # invoke CMAKE_CXX_COMPILER directly, so they need an explicit
+          # Android ARM64 target rather than relying on CMake's target settings.
+          python3 - "$X265_SOURCE/CMakeLists.txt" "$ANDROID_API" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          api = sys.argv[2]
+          text = path.read_text()
+
+          old = '''        COMMAND ${CMAKE_CXX_COMPILER}
+                  ARGS ${ARM_ARGS} -c ${ASM_SRC} -o ${ASM}.${SUFFIX}'''
+
+          new = (
+              '''        COMMAND ${CMAKE_CXX_COMPILER}
+                  ARGS --target=aarch64-linux-android'''
+              + api
+              + ''' ${ARM_ARGS} -c ${ASM_SRC} -o ${ASM}.${SUFFIX}'''
+          )
+
+          if text.count(old) != 1:
+              raise SystemExit(
+                  "Could not uniquely locate x265's ARM assembly command "
+                  f"(matches: {text.count(old)}). Build stopped without patching."
+              )
+
+          path.write_text(text.replace(old, new, 1))
+          print("Patched x265 ARM assembly command for Android ARM64.")
+          PY
+
+          # Confirm the patch was applied before configuring.
+          grep -n -A2 -B1 -- '--target=aarch64-linux-android' \
+            "$X265_SOURCE/CMakeLists.txt"
 
           build_x265_variant() {
             local variant="$1"
             shift
+
+            echo "Configuring x265 variant: $variant"
 
             cmake -S "$X265_SOURCE" -B "$X265_BUILD/$variant" -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
@@ -173,26 +189,31 @@ jobs:
               -DCMAKE_INSTALL_LIBDIR=lib \
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DCMAKE_C_COMPILER="$CC" \
-              -DCMAKE_CXX_COMPILER="$WRAPPER_DIR/clang++" \
+              -DCMAKE_CXX_COMPILER="$CXX" \
               -DCMAKE_C_COMPILER_TARGET="$TARGET" \
               -DCMAKE_CXX_COMPILER_TARGET="$TARGET" \
               -DENABLE_SHARED=OFF \
               -DENABLE_CLI=OFF \
               "$@"
 
-            cmake --build "$X265_BUILD/$variant" --parallel "$BUILD_JOBS"
+            cmake --build "$X265_BUILD/$variant" \
+              --parallel "$BUILD_JOBS"
           }
 
+          # Build the 10-bit library.
           build_x265_variant 10bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=OFF \
             -DEXPORT_C_API=OFF
 
+          # Build the 12-bit library.
           build_x265_variant 12bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=ON \
             -DEXPORT_C_API=OFF
 
+          # Build the 8-bit library and link in the 10-bit and 12-bit
+          # libraries to produce the combined multi-bit-depth library.
           build_x265_variant 8bit \
             -DHIGH_BIT_DEPTH=OFF \
             -DMAIN12=OFF \
@@ -202,9 +223,11 @@ jobs:
             -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
             -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
+          # Install the combined static library and public header.
           cp "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
           cp "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
 
+          # Provide pkg-config metadata for FFmpeg's configure script.
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
           exec_prefix=\${prefix}
@@ -219,11 +242,12 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
+          # Fail immediately if any expected output is missing.
           test -s "$DEPS/lib/libx265.a"
           test -s "$DEPS/include/x265.h"
           test -s "$DEPS/lib/pkgconfig/x265.pc"
 
-          echo "x265 8/10/12-bit build completed."
+          echo "x265 8-bit, 10-bit and 12-bit build completed successfully."
           
       - name: Build libvpx
         run: |
