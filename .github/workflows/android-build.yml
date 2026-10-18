@@ -136,10 +136,13 @@ jobs:
           X265_BUILD="$RUNNER_TEMP/x265-build"
           TARGET="aarch64-linux-android${ANDROID_API}"
 
-          mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
+          mkdir -p \
+            "$X265_BUILD" \
+            "$DEPS/lib" \
+            "$DEPS/include" \
+            "$DEPS/lib/pkgconfig"
 
-          # Patch the actual x265 ARM assembly custom command.
-          # Preserve x265's existing ARM_ARGS and add the Android target.
+          # Patch every ARM_ARGS assembly command to target Android ARM64.
           python3 - "$X265_SOURCE/CMakeLists.txt" "$ANDROID_API" <<'PY'
           import pathlib
           import re
@@ -150,37 +153,41 @@ jobs:
           text = path.read_text()
 
           pattern = re.compile(
-              r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}'
-              r'(?P<rest>[^\n]*)$'
+              r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}(?P<rest>[^\n]*)$'
           )
 
           matches = list(pattern.finditer(text))
 
-          if len(matches) != 1:
+          if len(matches) != 5:
               raise SystemExit(
-                  f"Expected one ARM_ARGS line in {path}, "
-                  f"found {len(matches)}. Build stopped."
+                  f"Expected 5 ARM_ARGS lines, found {len(matches)}. "
+                  "No changes made."
               )
 
-          match = matches[0]
-          replacement = (
-              match.group("indent")
-              + "ARGS --target=aarch64-linux-android"
-              + api
-              + " ${ARM_ARGS}"
-              + match.group("rest")
-          )
+          def patch_line(match):
+              return (
+                  match.group("indent")
+                  + "ARGS --target=aarch64-linux-android"
+                  + api
+                  + " ${ARM_ARGS}"
+                  + match.group("rest")
+              )
 
-          text = text[:match.start()] + replacement + text[match.end():]
-          path.write_text(text)
+          patched = pattern.sub(patch_line, text)
+          path.write_text(patched)
 
-          print("Patched x265 assembly target:")
-          print(replacement.strip())
+          print(f"Patched {len(matches)} ARM_ARGS lines.")
           PY
 
-          # Verify the target was inserted before CMake configuration.
-          grep -n -F -- "--target=aarch64-linux-android${ANDROID_API}" \
-            "$X265_SOURCE/CMakeLists.txt"
+          # Verify that the Android target is present in all five commands.
+          TARGET_COUNT="$(
+            grep -F -c -- "--target=${TARGET}" "$X265_SOURCE/CMakeLists.txt"
+          )"
+
+          if [ "$TARGET_COUNT" -ne 5 ]; then
+            echo "Expected 5 patched commands; found $TARGET_COUNT."
+            exit 1
+          fi
 
           build_x265_variant() {
             local variant="$1"
@@ -208,19 +215,19 @@ jobs:
               --parallel "$BUILD_JOBS"
           }
 
-          # 10-bit build.
+          # Build the 10-bit variant.
           build_x265_variant 10bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=OFF \
             -DEXPORT_C_API=OFF
 
-          # 12-bit build.
+          # Build the 12-bit variant.
           build_x265_variant 12bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=ON \
             -DEXPORT_C_API=OFF
 
-          # 8-bit build linked with the 10-bit and 12-bit libraries.
+          # Build the 8-bit variant linked with the 10-bit and 12-bit libraries.
           build_x265_variant 8bit \
             -DHIGH_BIT_DEPTH=OFF \
             -DMAIN12=OFF \
@@ -230,11 +237,11 @@ jobs:
             -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
             -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
-          # Copy the combined static library and public header.
+          # Install the combined static library and public header.
           cp "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
           cp "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
 
-          # pkg-config metadata for FFmpeg.
+          # Generate pkg-config metadata for FFmpeg.
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
           exec_prefix=\${prefix}
@@ -249,7 +256,7 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
-          # Verify outputs.
+          # Verify expected output files.
           test -s "$DEPS/lib/libx265.a"
           test -s "$DEPS/include/x265.h"
           test -s "$DEPS/lib/pkgconfig/x265.pc"
