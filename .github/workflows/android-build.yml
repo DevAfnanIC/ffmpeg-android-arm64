@@ -124,6 +124,7 @@ jobs:
           test -s "$DEPS/lib/libx264.a"
           test -s "$DEPS/include/x264.h"
 
+
       - name: Build x265 8-bit, 10-bit and 12-bit
         run: |
           set -euo pipefail
@@ -136,38 +137,38 @@ jobs:
           X265_BUILD="$RUNNER_TEMP/x265-build"
           TARGET="aarch64-linux-android${ANDROID_API}"
 
-          # FIX: x265 invokes the compiler directly for some ARM assembly
-          # files. Add the Android target to ARM_ARGS so these commands
-          # do not default to the host x86_64 target.
+          # Patch x265's custom ARM assembly compiler command.
+          # It invokes CMAKE_CXX_COMPILER directly, so the target must
+          # be included explicitly in the ARGS passed to that command.
           python3 - "$X265_SOURCE/CMakeLists.txt" "$TARGET" <<'PY'
           import pathlib
           import sys
 
-          cmake_file = pathlib.Path(sys.argv[1])
+          path = pathlib.Path(sys.argv[1])
           target = sys.argv[2]
-          content = cmake_file.read_text()
+          content = path.read_text()
 
-          old = "set(ARM_ARGS -fPIC)"
-          new = f"set(ARM_ARGS --target={target} -fPIC)"
+          old = "ARGS ${ARM_ARGS} -c ${ASM_SRC} -o ${ASM}.${SUFFIX}"
+          new = f"ARGS --target={target} ${{ARM_ARGS}} -c ${{ASM_SRC}} -o ${{ASM}}.${{SUFFIX}}"
 
-          if old not in content:
-              if new in content:
-                  print("x265 ARM_ARGS target patch is already present.")
-              else:
-                  raise SystemExit(
-                      "ERROR: Could not find the expected x265 ARM_ARGS line. "
-                      "Inspect source/CMakeLists.txt before continuing."
-                  )
+          if new in content:
+              print("Android ARM64 assembly target patch already exists.")
+          elif old in content:
+              content = content.replace(old, new)
+              path.write_text(content)
+              print(f"Patched x265 assembly commands for {target}.")
           else:
-              content = content.replace(old, new, 1)
-              cmake_file.write_text(content)
-              print(f"Patched x265 ARM assembly target: {target}")
+              raise SystemExit(
+                  "ERROR: x265 assembly command did not match expected patterns. "
+                  "Inspect source/CMakeLists.txt."
+              )
 
-          if new not in cmake_file.read_text():
-              raise SystemExit("ERROR: x265 ARM_ARGS patch verification failed.")
+          verify = path.read_text()
+          if f"ARGS --target={target} ${{ARM_ARGS}}" not in verify:
+              raise SystemExit("ERROR: Failed to verify x265 target patch.")
           PY
 
-          grep -n 'set(ARM_ARGS' "$X265_SOURCE/CMakeLists.txt"
+          grep -n -- '--target=' "$X265_SOURCE/CMakeLists.txt"
 
           rm -rf "$X265_BUILD"
           mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
@@ -195,20 +196,16 @@ jobs:
             cmake --build "$X265_BUILD/$variant" --parallel "$BUILD_JOBS"
           }
 
-          # Build 10-bit variant without exporting its public C API.
           build_x265_variant 10bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=OFF \
             -DEXPORT_C_API=OFF
 
-          # Build 12-bit variant without exporting its public C API.
           build_x265_variant 12bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=ON \
             -DEXPORT_C_API=OFF
 
-          # Build the public 8-bit library with both high-bit-depth
-          # variants linked into the combined archive.
           build_x265_variant 8bit \
             -DHIGH_BIT_DEPTH=OFF \
             -DMAIN12=OFF \
@@ -240,7 +237,7 @@ jobs:
           test -s "$DEPS/lib/pkgconfig/x265.pc"
 
           echo "x265 8/10/12-bit build completed."
-
+          
       - name: Build libvpx
         run: |
           set -euo pipefail
