@@ -85,29 +85,23 @@ jobs:
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           CROSS="$TOOLCHAIN/bin/aarch64-linux-android-"
 
-          ln -sf "${CROSS}ar" "$RUNNER_TEMP/aarch64-linux-android-ar"
-          ln -sf "${CROSS}ranlib" "$RUNNER_TEMP/aarch64-linux-android-ranlib"
-          ln -sf "${CROSS}strip" "$RUNNER_TEMP/aarch64-linux-android-strip"
-          ln -sf "${CROSS}nm" "$RUNNER_TEMP/aarch64-linux-android-nm"
-          ln -sf "${CROSS}strings" "$RUNNER_TEMP/aarch64-linux-android-strings"
-
-          export PATH="$RUNNER_TEMP:$TOOLCHAIN/bin:$PATH"
+          export PATH="$TOOLCHAIN/bin:$PATH"
 
           ./configure \
             --prefix="$DEPS" \
             --host=aarch64-linux \
             --cross-prefix="$CROSS" \
-            --cc="$CC" \
             --sysroot="$SYSROOT" \
+            --extra-cflags="-O2 -fPIC" \
+            --extra-ldflags="-L$DEPS/lib" \
             --enable-static \
             --enable-pic \
-            --disable-shared \
             --disable-cli \
             --disable-opencl
 
           make -j"$BUILD_JOBS"
           make install
-
+          
       - name: Build x265 8-bit, 10-bit and 12-bit
         run: |
           set -euo pipefail
