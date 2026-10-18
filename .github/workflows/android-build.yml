@@ -119,7 +119,7 @@ jobs:
 
           make -j"$BUILD_JOBS"
           make install
-          
+
       - name: Build x265 8-bit, 10-bit and 12-bit
         run: |
           set -euo pipefail
@@ -128,10 +128,16 @@ jobs:
             https://bitbucket.org/multicoreware/x265_git.git \
             "$RUNNER_TEMP/x265"
 
-          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
           X265_SOURCE="$RUNNER_TEMP/x265/source"
           X265_BUILD="$RUNNER_TEMP/x265-build"
 
+          mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
+
+          # Android ARM64 compiler target flags.
+          TARGET="aarch64-linux-android${ANDROID_API}"
+          COMMON_FLAGS="--target=${TARGET} -march=armv8-a -O2 -fPIC"
+
+          # Build the 10-bit library.
           cmake -S "$X265_SOURCE" -B "$X265_BUILD/10bit" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -139,6 +145,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_ASM_COMPILER="$CC" \
+            -DCMAKE_C_FLAGS="$COMMON_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$COMMON_FLAGS" \
+            -DCMAKE_ASM_FLAGS="--target=${TARGET} -march=armv8-a" \
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF \
             -DHIGH_BIT_DEPTH=ON \
@@ -147,6 +159,7 @@ jobs:
 
           cmake --build "$X265_BUILD/10bit" --parallel "$BUILD_JOBS"
 
+          # Build the 12-bit library.
           cmake -S "$X265_SOURCE" -B "$X265_BUILD/12bit" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -154,6 +167,12 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_ASM_COMPILER="$CC" \
+            -DCMAKE_C_FLAGS="$COMMON_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$COMMON_FLAGS" \
+            -DCMAKE_ASM_FLAGS="--target=${TARGET} -march=armv8-a" \
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF \
             -DHIGH_BIT_DEPTH=ON \
@@ -162,6 +181,7 @@ jobs:
 
           cmake --build "$X265_BUILD/12bit" --parallel "$BUILD_JOBS"
 
+          # Build the 8-bit library and link in the 10-bit and 12-bit libraries.
           cmake -S "$X265_SOURCE" -B "$X265_BUILD/8bit" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -169,21 +189,27 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_ASM_COMPILER="$CC" \
+            -DCMAKE_C_FLAGS="$COMMON_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$COMMON_FLAGS" \
+            -DCMAKE_ASM_FLAGS="--target=${TARGET} -march=armv8-a" \
             -DENABLE_SHARED=OFF \
             -DENABLE_CLI=OFF \
             -DHIGH_BIT_DEPTH=OFF \
             -DMAIN12=OFF \
             -DEXPORT_C_API=ON \
-            -D LINKED_10BIT=ON \
-            -D LINKED_12BIT=ON \
+            -DLINKED_10BIT=ON \
+            -DLINKED_12BIT=ON \
             -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
             -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
           cmake --build "$X265_BUILD/8bit" --parallel "$BUILD_JOBS"
 
-          mkdir -p "$DEPS/lib"
+          # Install the combined 8/10/12-bit archive.
           cp "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
-          cp "$X265_SOURCE/x265.h" "$DEPS/include/"
+          cp "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
 
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
@@ -199,6 +225,12 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
+          test -s "$DEPS/lib/libx265.a"
+          test -s "$DEPS/include/x265.h"
+          test -s "$DEPS/lib/pkgconfig/x265.pc"
+
+          echo "x265 8/10/12-bit build completed."
+          
       - name: Build libvpx
         run: |
           set -euo pipefail
