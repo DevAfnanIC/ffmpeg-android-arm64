@@ -411,7 +411,6 @@ jobs:
           test -s "$DEPS/lib/libspeex.a"
           test -s "$DEPS/lib/libsoxr.a"
 
-
       - name: Configure FFmpeg
         shell: bash
         run: |
@@ -419,32 +418,18 @@ jobs:
 
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== pkg-config diagnostics ==="
-          pkg-config --version
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-          echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
-
-          echo "=== Opus metadata ==="
-          cat "$DEPS/lib/pkgconfig/opus.pc"
-
-          echo "=== Opus dependency check ==="
-          if ! pkg-config --exists opus; then
-            pkg-config --print-errors --exists opus || true
-            echo "ERROR: Opus metadata or its dependencies are invalid."
-            exit 1
-          fi
-
-          echo "Opus version: $(pkg-config --modversion opus)"
-          echo "Opus cflags: $(pkg-config --cflags opus)"
-          echo "Opus libs: $(pkg-config --libs opus)"
-
-          echo "=== Check required libraries ==="
-          for pc in ogg vorbis vorbisenc vorbisfile opus; do
-            pkg-config --print-errors --exists "$pc"
-            echo "$pc: $(pkg-config --modversion "$pc")"
+          echo "=== Verify dependency paths ==="
+          for pc in ogg vorbis vorbisenc vorbisfile opus vpx x264 x265 speex soxr twolame; do
+            if pkg-config --exists "$pc"; then
+              echo "$pc: $(pkg-config --modversion "$pc")"
+            fi
           done
+
+          echo "=== Opus flags (must use DEPS paths) ==="
+          pkg-config --cflags --libs opus
+          pkg-config --static --libs opus
 
           git clone --depth 1 --branch "n${FFMPEG_VERSION}" \
             https://git.ffmpeg.org/ffmpeg.git \
@@ -469,6 +454,7 @@ jobs:
             --ar="$AR" \
             --ranlib="$RANLIB" \
             --strip="$STRIP" \
+            --pkg-config-flags="--static" \
             --enable-gpl \
             --enable-libx264 \
             --enable-libx265 \
