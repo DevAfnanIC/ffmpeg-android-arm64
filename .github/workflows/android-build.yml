@@ -412,17 +412,38 @@ jobs:
           test -s "$DEPS/lib/libsoxr.a"
 
       - name: Configure FFmpeg
+        shell: bash
         run: |
           set -euo pipefail
 
+          # Locate and validate the cross-compiled dependencies first.
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig:$DEPS/share/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig:$DEPS/share/pkgconfig"
+          export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
+
+          echo "=== Dependency pkg-config files ==="
+          ls -la "$DEPS/lib/pkgconfig" || true
+          ls -la "$DEPS/share/pkgconfig" || true
+
+          echo "=== Check Vorbis and Ogg metadata ==="
+          for pc in ogg vorbis vorbisenc vorbisfile; do
+            if ! pkg-config --exists "$pc"; then
+              echo "ERROR: pkg-config cannot find '$pc'."
+              echo "Check that the Ogg and Vorbis build steps installed their .pc files under:"
+              echo "  $DEPS/lib/pkgconfig"
+              echo "  $DEPS/share/pkgconfig"
+              exit 1
+            fi
+            echo "$pc: $(pkg-config --modversion "$pc")"
+          done
+
+          # Clone the requested FFmpeg release.
           git clone --depth 1 --branch "n${FFMPEG_VERSION}" \
             https://git.ffmpeg.org/ffmpeg.git \
             "$RUNNER_TEMP/ffmpeg"
 
           cd "$RUNNER_TEMP/ffmpeg"
 
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           export CFLAGS="-O2 -fPIC -I$DEPS/include"
           export CXXFLAGS="-O2 -fPIC -I$DEPS/include"
           export LDFLAGS="-L$DEPS/lib"
@@ -463,8 +484,10 @@ jobs:
             --extra-libs="-lc++ -lm -ldl"
 
           echo "=== FFmpeg configure summary ==="
-          grep -E 'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)=' config.h || true
-
+          grep -E \
+            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)=' \
+            config.h || true
+            
       - name: Build FFmpeg
         run: |
           set -euo pipefail
