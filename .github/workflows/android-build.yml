@@ -651,31 +651,60 @@ jobs:
           set -euo pipefail
 
           FFMPEG="$PREFIX/bin/ffmpeg"
+          CONFIG="$RUNNER_TEMP/ffmpeg/config.h"
+          CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
 
-          echo "=== External-library configuration ==="
-          grep -E \
-            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)=' \
-            "$RUNNER_TEMP/ffmpeg/config.h" || true
+          echo "=== Verify installed FFmpeg binary ==="
+          test -s "$FFMPEG"
+          file "$FFMPEG"
 
-          echo "=== Required encoders ==="
-          "$FFMPEG" -hide_banner -encoders
+          echo "=== Verify ELF architecture ==="
+          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
+            | grep -E 'Class:|Machine:'
 
-          for encoder in \
-            libx264 libx265 libvpx_vp8 libvpx_vp9 \
-            libopus libvorbis libmp3lame libtwolame; do
-            echo "Checking encoder: $encoder"
-            "$FFMPEG" -hide_banner -h "encoder=$encoder" >/dev/null
+          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
+            | grep -qE 'Machine:.*AArch64'
+
+          echo "=== Verify FFmpeg configuration files ==="
+          test -s "$CONFIG"
+          test -s "$CONFIG_MK"
+
+          echo "=== External-library configuration in config.h ==="
+
+          for lib in \
+            LIBX264 LIBX265 LIBVPX LIBOPUS LIBVORBIS \
+            LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
+
+            if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
+              echo "ENABLED: $lib"
+            else
+              echo "NOT ENABLED: $lib"
+            fi
           done
 
-          echo "Checking Speex decoder"
-          "$FFMPEG" -hide_banner -h decoder=speex >/dev/null
+          echo "=== External-library configuration in config.mak ==="
 
-          echo "=== ELF architecture ==="
-          file "$FFMPEG"
+          grep -E \
+            '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
+            "$CONFIG_MK" || true
+
+          echo "=== Verify required libraries were enabled ==="
+
+          for lib in \
+            LIBX264 LIBX265 LIBVPX LIBOPUS LIBVORBIS \
+            LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
+
+            if ! grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
+              echo "ERROR: Expected external library is not enabled: $lib"
+              exit 1
+            fi
+          done
 
           echo "=== Dynamic dependencies ==="
           "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" || true
 
+          echo "=== Verification completed ==="
+          echo "The Android binary was inspected, not executed on Ubuntu."
       - name: Package Android ARM64 build
         shell: bash
         run: |
