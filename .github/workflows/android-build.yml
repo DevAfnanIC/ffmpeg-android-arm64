@@ -263,7 +263,9 @@ jobs:
 
           echo "x265 8-bit, 10-bit and 12-bit build completed successfully."
           
-      - name: Build libvpx
+
+      - name: Build libvpx for Android ARM64
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -272,6 +274,15 @@ jobs:
             "$RUNNER_TEMP/libvpx"
 
           cd "$RUNNER_TEMP/libvpx"
+
+          # Use the NDK's API-24 ARM64 compiler and LLVM tools.
+          export CC="$CC"
+          export CXX="$CXX"
+          export AR="$AR"
+          export AS="$CC"
+          export LD="$CXX"
+          export STRIP="$STRIP"
+          export CROSS=""
 
           ./configure \
             --prefix="$DEPS" \
@@ -287,13 +298,15 @@ jobs:
             --enable-vp9 \
             --disable-webm-io \
             --disable-libyuv \
-            --sdk-path="$NDK"
+            --extra-cflags="--target=aarch64-linux-android${ANDROID_API} --sysroot=${SYSROOT}" \
+            --extra-cxxflags="--target=aarch64-linux-android${ANDROID_API} --sysroot=${SYSROOT}"
 
           make -j"$BUILD_JOBS"
           make install
 
           test -s "$DEPS/lib/libvpx.a"
-
+          echo "libvpx Android ARM64 build completed successfully."
+          
       - name: Build audio libraries
         run: |
           set -euo pipefail
