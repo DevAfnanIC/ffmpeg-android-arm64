@@ -123,6 +123,7 @@ jobs:
           test -s "$DEPS/lib/libx264.a"
           test -s "$DEPS/include/x264.h"
 
+
       - name: Build x265 8-bit, 10-bit and 12-bit
         shell: bash
         run: |
@@ -173,13 +174,10 @@ jobs:
                   + match.group("rest")
               )
 
-          patched = pattern.sub(patch_line, text)
-          path.write_text(patched)
-
+          path.write_text(pattern.sub(patch_line, text))
           print(f"Patched {len(matches)} ARM_ARGS lines.")
           PY
 
-          # Verify that the Android target is present in all five commands.
           TARGET_COUNT="$(
             grep -F -c -- "--target=${TARGET}" "$X265_SOURCE/CMakeLists.txt"
           )"
@@ -193,7 +191,7 @@ jobs:
             local variant="$1"
             shift
 
-            echo "Configuring x265 variant: $variant"
+            echo "=== Configuring x265: $variant ==="
 
             cmake -S "$X265_SOURCE" -B "$X265_BUILD/$variant" -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
@@ -215,19 +213,18 @@ jobs:
               --parallel "$BUILD_JOBS"
           }
 
-          # Build the 10-bit variant.
+          # Build 10-bit and 12-bit libraries first.
           build_x265_variant 10bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=OFF \
             -DEXPORT_C_API=OFF
 
-          # Build the 12-bit variant.
           build_x265_variant 12bit \
             -DHIGH_BIT_DEPTH=ON \
             -DMAIN12=ON \
             -DEXPORT_C_API=OFF
 
-          # Build the 8-bit variant linked with the 10-bit and 12-bit libraries.
+          # Build the public 8-bit library linked with both higher bit depths.
           build_x265_variant 8bit \
             -DHIGH_BIT_DEPTH=OFF \
             -DMAIN12=OFF \
@@ -237,11 +234,35 @@ jobs:
             -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
             -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
-          # Install the combined static library and public header.
-          cp "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
-          cp "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
+          # Install the combined static library.
+          install -Dm644 \
+            "$X265_BUILD/8bit/libx265.a" \
+            "$DEPS/lib/libx265.a"
 
-          # Generate pkg-config metadata for FFmpeg.
+          # Install the public header.
+          install -Dm644 \
+            "$X265_SOURCE/x265.h" \
+            "$DEPS/include/x265.h"
+
+          # x265.h includes this generated header. Locate it in the 8-bit
+          # build output and install it beside x265.h.
+          X265_CONFIG_HEADER="$(
+            find "$X265_BUILD/8bit" -type f \
+              -name x265_config.h -print -quit
+          )"
+
+          if [ -z "$X265_CONFIG_HEADER" ]; then
+            echo "ERROR: x265_config.h was not generated in the 8-bit build."
+            echo "Searching all build outputs:"
+            find "$X265_BUILD" -type f -name x265_config.h -print
+            exit 1
+          fi
+
+          install -Dm644 \
+            "$X265_CONFIG_HEADER" \
+            "$DEPS/include/x265_config.h"
+
+          # Create pkg-config metadata for FFmpeg.
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
           exec_prefix=\${prefix}
@@ -256,14 +277,23 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
-          # Verify expected output files.
+          # Verify all required files.
           test -s "$DEPS/lib/libx265.a"
           test -s "$DEPS/include/x265.h"
+          test -s "$DEPS/include/x265_config.h"
           test -s "$DEPS/lib/pkgconfig/x265.pc"
+
+          echo "=== Installed x265 files ==="
+          ls -lh \
+            "$DEPS/lib/libx265.a" \
+            "$DEPS/include/x265.h" \
+            "$DEPS/include/x265_config.h"
+
+          echo "=== Verify header inclusion ==="
+          grep -n 'x265_config.h' "$DEPS/include/x265.h"
 
           echo "x265 8-bit, 10-bit and 12-bit build completed successfully."
           
-
       - name: Build libvpx for Android ARM64
         shell: bash
         run: |
