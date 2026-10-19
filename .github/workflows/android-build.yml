@@ -420,16 +420,34 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== Verify dependency paths ==="
-          for pc in ogg vorbis vorbisenc vorbisfile opus vpx x264 x265 speex soxr twolame; do
-            if pkg-config --exists "$pc"; then
-              echo "$pc: $(pkg-config --modversion "$pc")"
-            fi
-          done
+          echo "=== x265.pc ==="
+          cat "$DEPS/lib/pkgconfig/x265.pc"
 
-          echo "=== Opus flags (must use DEPS paths) ==="
-          pkg-config --cflags --libs opus
-          pkg-config --static --libs opus
+          echo "=== x265 pkg-config flags ==="
+          pkg-config --cflags x265
+          pkg-config --libs x265
+          pkg-config --static --libs x265
+
+          echo "=== x265 libraries ==="
+          find "$DEPS/lib" -maxdepth 1 -type f \
+            \( -iname '*x265*' -o -iname '*x265*.a' \) -print
+
+          echo "=== x265 header ==="
+          ls -l "$DEPS/include/x265.h"
+
+          echo "=== x265 static link test ==="
+          printf '#include <x265.h>\nint main(void) { return x265_api_get(0) == 0; }\n' \
+            > "$RUNNER_TEMP/x265_test.c"
+
+          "$CC" \
+            -I"$DEPS/include" \
+            "$RUNNER_TEMP/x265_test.c" \
+            -L"$DEPS/lib" \
+            -Wl,--start-group -lx265 -Wl,--end-group \
+            -lm -ldl -llog -landroid \
+            -o "$RUNNER_TEMP/x265_test"
+
+          echo "x265 link test passed"
 
           git clone --depth 1 --branch "n${FFMPEG_VERSION}" \
             https://git.ffmpeg.org/ffmpeg.git \
