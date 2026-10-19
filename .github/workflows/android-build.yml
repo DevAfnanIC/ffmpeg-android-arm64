@@ -616,12 +616,35 @@ jobs:
           set -euo pipefail
 
           cd "$RUNNER_TEMP/ffmpeg"
+
+          echo "=== Building FFmpeg for Android ARM64 ==="
           make -j"$BUILD_JOBS"
+
+          echo "=== Installing FFmpeg ==="
           make install
 
-          test -x "$PREFIX/bin/ffmpeg"
-          "$PREFIX/bin/ffmpeg" -version
+          FFMPEG="$PREFIX/bin/ffmpeg"
 
+          echo "=== Verifying installed binary ==="
+          test -s "$FFMPEG"
+          test -x "$FFMPEG"
+
+          echo "=== Binary file information ==="
+          file "$FFMPEG"
+
+          echo "=== ELF header ==="
+          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG"
+
+          echo "=== Verifying ARM64 architecture ==="
+          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
+            | grep -E 'Machine:.*AArch64'
+
+          echo "=== Verifying Android dynamic dependencies ==="
+          "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" || true
+
+          echo "FFmpeg built and installed successfully."
+          echo "The Android ARM64 binary will be tested on Android, not on the Linux runner."
+          
       - name: Verify FFmpeg configuration and encoders
         shell: bash
         run: |
