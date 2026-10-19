@@ -329,6 +329,8 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
+          mkdir -p "$DEPS/lib/pkgconfig"
+
           build_autotools() {
             local name="$1"
             local url="$2"
@@ -338,9 +340,12 @@ jobs:
             rm -rf "$src"
             mkdir -p "$src"
 
-            curl -fL --retry 3 "$url" -o "$RUNNER_TEMP/$name.tar.gz"
+            curl -fL --retry 3 "$url" \
+              -o "$RUNNER_TEMP/$name.tar.gz"
+
             tar -xzf "$RUNNER_TEMP/$name.tar.gz" \
-              --strip-components=1 -C "$src"
+              --strip-components=1 \
+              -C "$src"
 
             cd "$src"
 
@@ -356,35 +361,95 @@ jobs:
             make install
           }
 
+          echo "=== Building Opus ==="
+
           build_autotools opus \
             https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz \
             "--disable-doc --disable-extra-programs"
+
+          test -s "$DEPS/lib/libopus.a"
+
+          echo "=== Building Ogg ==="
 
           build_autotools libogg \
             https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz \
             "--disable-examples --disable-oggtest"
 
+          test -s "$DEPS/lib/libogg.a"
+
+          echo "=== Building Vorbis ==="
+
           build_autotools libvorbis \
             https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz \
             "--disable-examples --disable-oggtest"
+
+          test -s "$DEPS/lib/libvorbis.a"
+          test -s "$DEPS/lib/libvorbisenc.a"
+
+          echo "=== Building LAME ==="
 
           build_autotools lame \
             https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz \
             "--disable-frontend"
 
+          test -s "$DEPS/lib/libmp3lame.a"
+
+          # Some LAME builds install libmp3lame.pc instead of lame.pc,
+          # or do not install a pkg-config file at all.
+          # FFmpeg's --enable-libmp3lame checks for the package named "lame".
+          if ! pkg-config --exists lame; then
+            echo "Creating fallback lame.pc"
+
+            cat > "$DEPS/lib/pkgconfig/lame.pc" <<EOF
+          prefix=$DEPS
+          exec_prefix=\${prefix}
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: lame
+          Description: LAME MP3 encoder
+          Version: 3.100
+          Libs: -L\${libdir} -lmp3lame
+          Libs.private: -lm
+          Cflags: -I\${includedir}
+          EOF
+          fi
+
+          echo "=== Verifying LAME pkg-config metadata ==="
+
+          test -s "$DEPS/lib/pkgconfig/lame.pc"
+          pkg-config --modversion lame
+          pkg-config --cflags lame
+          pkg-config --static --libs lame
+
+          echo "=== Building TwoLAME ==="
+
           build_autotools twolame \
             https://downloads.sourceforge.net/project/twolame/twolame/0.4.0/twolame-0.4.0.tar.gz \
             "--disable-frontend"
+
+          test -s "$DEPS/lib/libtwolame.a"
+
+          echo "=== Building Speex ==="
 
           build_autotools speex \
             https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz \
             "--disable-binaries --disable-examples"
 
+          test -s "$DEPS/lib/libspeex.a"
+
+          echo "=== Building SoXR ==="
+
+          rm -rf "$RUNNER_TEMP/soxr" "$RUNNER_TEMP/soxr-build"
+
           git clone --depth 1 --branch 0.1.3 \
             https://github.com/chirlu/soxr.git \
             "$RUNNER_TEMP/soxr"
 
-          cmake -S "$RUNNER_TEMP/soxr" -B "$RUNNER_TEMP/soxr-build" -G Ninja \
+          cmake \
+            -S "$RUNNER_TEMP/soxr" \
+            -B "$RUNNER_TEMP/soxr-build" \
+            -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM="android-${ANDROID_API}" \
@@ -396,22 +461,61 @@ jobs:
             -DWITH_OPENMP=OFF \
             -DBUILD_TESTS=OFF
 
-          cmake --build "$RUNNER_TEMP/soxr-build" --parallel "$BUILD_JOBS"
+          cmake --build "$RUNNER_TEMP/soxr-build" \
+            --parallel "$BUILD_JOBS"
+
           cmake --install "$RUNNER_TEMP/soxr-build"
 
           echo "=== Installed audio libraries ==="
+
           find "$DEPS/lib" -maxdepth 2 \
-            \( -name '*.a' -o -name '*.pc' \) -print | sort
+            \( -name '*.a' -o -name '*.pc' \) \
+            -print | sort
+
+          echo "=== Verifying required static libraries ==="
 
           for lib in \
-            libopus.a libogg.a libvorbis.a libvorbisenc.a \
-            libmp3lame.a libtwolame.a libspeex.a libsoxr.a; do
-            test -s "$DEPS/lib/$lib" || {
-              echo "Missing expected library: $DEPS/lib/$lib"
+            libopus.a \
+            libogg.a \
+            libvorbis.a \
+            libvorbisenc.a \
+            libmp3lame.a \
+            libtwolame.a \
+            libspeex.a \
+            libsoxr.a; do
+
+            if [ ! -s "$DEPS/lib/$lib" ]; then
+              echo "ERROR: Missing expected library: $DEPS/lib/$lib"
               exit 1
-            }
+            fi
+
+            echo "OK: $lib"
           done
 
+          echo "=== Verifying pkg-config packages ==="
+
+          for lib in \
+            opus \
+            vorbis \
+            vorbisenc \
+            lame \
+            twolame \
+            speex \
+            soxr; do
+
+            if ! pkg-config --exists "$lib"; then
+              echo "ERROR: pkg-config cannot find: $lib"
+              echo "Available .pc files:"
+              find "$DEPS/lib/pkgconfig" -maxdepth 1 \
+                -name '*.pc' -print | sort
+              exit 1
+            fi
+
+            echo "$lib: $(pkg-config --modversion "$lib")"
+          done
+
+          echo "All audio libraries built and verified successfully."
+          
       - name: Configure FFmpeg
         shell: bash
         run: |
