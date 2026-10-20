@@ -310,6 +310,77 @@ jobs:
           test -s "$DEPS/lib/libvpx.a"
           echo "libvpx build completed."
 
+
+      - name: Build libaom for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          AOM_SOURCE="$RUNNER_TEMP/libaom"
+          AOM_BUILD="$RUNNER_TEMP/libaom-build"
+
+          echo "=== Clone libaom ==="
+          git clone --depth 1 --branch v3.12.1 \
+            https://aomedia.googlesource.com/aom \
+            "$AOM_SOURCE"
+
+          echo "=== Configure libaom for Android ARM64 ==="
+          cmake \
+            -S "$AOM_SOURCE" \
+            -B "$AOM_BUILD" \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_C_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
+            -DCMAKE_CXX_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DENABLE_TESTS=OFF \
+            -DENABLE_EXAMPLES=OFF \
+            -DENABLE_TOOLS=OFF \
+            -DENABLE_DOCS=OFF \
+            -DENABLE_TESTDATA=OFF \
+            -DCONFIG_AV1_ENCODER=1 \
+            -DCONFIG_AV1_DECODER=1 \
+            -DCONFIG_PIC=1 \
+            -DCONFIG_RUNTIME_CPU_DETECT=1 \
+            -DCONFIG_MULTITHREAD=1 \
+            -DAOM_TARGET_CPU=generic
+
+          echo "=== Build libaom ==="
+          cmake --build "$AOM_BUILD" \
+            --parallel "$BUILD_JOBS"
+
+          echo "=== Install libaom ==="
+          cmake --install "$AOM_BUILD"
+
+          echo "=== Verify installed files ==="
+          find "$DEPS/lib" "$DEPS/include" \
+            -maxdepth 3 -iname '*aom*' -print
+
+          if [ ! -s "$DEPS/lib/libaom.a" ]; then
+            echo "ERROR: libaom.a was not installed at the expected path."
+            find "$AOM_BUILD" -type f -name 'libaom*.a' -print
+            exit 1
+          fi
+
+          if [ ! -s "$DEPS/include/aom/aom_encoder.h" ] || \
+             [ ! -s "$DEPS/include/aom/aom_decoder.h" ]; then
+            echo "ERROR: libaom public headers are missing."
+            exit 1
+          fi
+
+          echo "=== Verify ARM64 archive objects ==="
+          "$TOOLCHAIN/bin/llvm-ar" t "$DEPS/lib/libaom.a" | head -20
+
+          echo "libaom static build completed successfully."
+          
       - name: Build audio libraries
         shell: bash
         run: |
@@ -526,7 +597,7 @@ jobs:
           unset PKG_CONFIG_SYSROOT_DIR
 
           echo "=== pkg-config library checks ==="
-          for lib in x264 x265 vpx opus vorbis vorbisenc \
+          for lib in x264 x265 vpx aom opus vorbis vorbisenc \
             lame twolame speex soxr; do
             if ! pkg-config --exists "$lib"; then
               echo "pkg-config cannot find: $lib"
@@ -587,6 +658,7 @@ jobs:
             --enable-libx264 \
             --enable-libx265 \
             --enable-libvpx \
+            --enable-libaom \
             --enable-libopus \
             --enable-libvorbis \
             --enable-libmp3lame \
@@ -607,8 +679,8 @@ jobs:
 
           echo "=== FFmpeg external-library configuration ==="
           grep -E \
-            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)=' \
-            config.h || true
+            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBAOM|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)' \
+             config.h || true
 
       - name: Build FFmpeg
         shell: bash
@@ -700,7 +772,7 @@ jobs:
             echo "=== External-library configuration ==="
 
             for lib in \
-              LIBX264 LIBX265 LIBVPX LIBOPUS LIBVORBIS \
+              LIBX264 LIBX265 LIBVPX LIBAOM LIBOPUS LIBVORBIS \
               LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
 
               if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
@@ -713,7 +785,7 @@ jobs:
             echo "=== Configuration in config.mak ==="
 
             grep -E \
-              '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
+              '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBAOM|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
               "$CONFIG_MK" || true
           fi
 
