@@ -742,7 +742,6 @@ jobs:
           test -s "$DEPS/lib/pkgconfig/fribidi.pc"
           echo "FriBidi built successfully"
 
-
       - name: Build HarfBuzz
         shell: bash
         run: |
@@ -752,9 +751,27 @@ jobs:
           SRC="$RUNNER_TEMP/harfbuzz"
           BUILD="$RUNNER_TEMP/harfbuzz-build"
 
+          # Make Android dependency metadata visible in this step.
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          echo "=== Verify FreeType installation ==="
+          test -s "$DEPS/lib/libfreetype.a"
+          test -s "$DEPS/lib/pkgconfig/freetype2.pc"
+
+          echo "=== Verify FreeType pkg-config ==="
+          cat "$DEPS/lib/pkgconfig/freetype2.pc"
+          pkg-config --modversion freetype2
+          pkg-config --cflags freetype2
+          pkg-config --static --libs freetype2
+
+          echo "=== Clone HarfBuzz ==="
           git clone --depth 1 --branch "$VERSION" \
             https://github.com/harfbuzz/harfbuzz.git "$SRC"
 
+          echo "=== Configure HarfBuzz ==="
           meson setup "$BUILD" "$SRC" \
             --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
             --prefix "$DEPS" \
@@ -770,13 +787,18 @@ jobs:
             -Dfreetype=enabled \
             -Dgraphite2=disabled
 
+          echo "=== Build HarfBuzz ==="
           ninja -C "$BUILD" -j"$BUILD_JOBS"
+
+          echo "=== Install HarfBuzz ==="
           ninja -C "$BUILD" install
 
+          echo "=== Verify HarfBuzz ==="
           test -s "$DEPS/lib/libharfbuzz.a"
           test -s "$DEPS/lib/pkgconfig/harfbuzz.pc"
-          echo "HarfBuzz built successfully"
+          pkg-config --modversion harfbuzz
 
+          echo "HarfBuzz built successfully"
 
       - name: Build libwebp
         shell: bash
