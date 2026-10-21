@@ -1052,20 +1052,20 @@ jobs:
           tar -xjf "$ARCHIVE" --strip-components=1 -C "$SRC"
           cd "$SRC"
 
-          # Refresh obsolete Autoconf target-triplet helpers.
-          # Fetch current GNU config helpers to support Android AArch64.
+          # Fetch current GNU config helpers for Android AArch64.
           curl -fL --retry 3 \
-          https://git.savannah.gnu.org/cgit/config.git/plain/config.sub \
+            https://git.savannah.gnu.org/cgit/config.git/plain/config.sub \
             -o ./config.sub
 
           curl -fL --retry 3 \
-          https://git.savannah.gnu.org/cgit/config.git/plain/config.guess \
+            https://git.savannah.gnu.org/cgit/config.git/plain/config.guess \
             -o ./config.guess
 
           chmod +x ./config.sub ./config.guess
-         
-# Fail early if the updated helper does not recognize the target.
-       ./config.sub aarch64-linux-android
+
+          # Fail early if the helper recognizes the target.
+          ./config.sub aarch64-linux-android
+
           ./configure \
             --build=x86_64-linux-gnu \
             --host=aarch64-linux-android \
@@ -1093,7 +1093,7 @@ jobs:
           echo "=== Theora pkg-config files ==="
           find "$DEPS/lib/pkgconfig" -maxdepth 1 -iname '*theora*.pc' -print
 
-          echo "Theora built successfully"
+          echo "Theora built successfully"   
           
       - name: Build libass
         shell: bash
