@@ -1040,7 +1040,8 @@ jobs:
           test -s "$DEPS/lib/libogg.a"
           test -s "$DEPS/lib/pkgconfig/ogg.pc"
 
-          curl -fL \
+          # Download and verify the official Theora source archive.
+          curl -fL --retry 3 --retry-all-errors \
             "https://downloads.xiph.org/releases/theora/libtheora-${VERSION}.tar.bz2" \
             -o "$ARCHIVE"
 
@@ -1052,18 +1053,39 @@ jobs:
           tar -xjf "$ARCHIVE" --strip-components=1 -C "$SRC"
           cd "$SRC"
 
-          # Fetch current GNU config helpers for Android AArch64.
-          curl -fL --retry 3 \
-            https://git.savannah.gnu.org/cgit/config.git/plain/config.sub \
-            -o ./config.sub
+          # Download GNU config helpers. Savannah is the primary source;
+          # the GNU gitweb endpoint is the fallback.
+          download_config_helper() {
+            local filename="$1"
+            local destination="./$filename"
+            local tmp="${destination}.download"
 
-          curl -fL --retry 3 \
-            https://git.savannah.gnu.org/cgit/config.git/plain/config.guess \
-            -o ./config.guess
+            rm -f "$tmp"
 
-          chmod +x ./config.sub ./config.guess
+            if ! curl -fL --retry 2 --retry-all-errors \
+              "https://git.savannah.gnu.org/cgit/config.git/plain/${filename}" \
+              -o "$tmp"; then
+              rm -f "$tmp"
+              echo "Primary GNU helper URL failed; trying fallback for ${filename}"
 
-          # Fail early if the helper recognizes the target.
+              curl -fL --retry 3 --retry-all-errors \
+                "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=${filename};hb=HEAD" \
+                -o "$tmp"
+            fi
+
+            test -s "$tmp"
+
+            # Reject HTML error pages or other invalid downloads.
+            head -n 1 "$tmp" | grep -q '^#!'
+
+            chmod +x "$tmp"
+            mv "$tmp" "$destination"
+          }
+
+          download_config_helper config.sub
+          download_config_helper config.guess
+
+          # Verify that the helper accepts the Android target.
           ./config.sub aarch64-linux-android
 
           ./configure \
@@ -1093,8 +1115,7 @@ jobs:
           echo "=== Theora pkg-config files ==="
           find "$DEPS/lib/pkgconfig" -maxdepth 1 -iname '*theora*.pc' -print
 
-          echo "Theora built successfully"   
-          
+          echo "Theora built successfully"
 
       - name: Build libass
         shell: bash
