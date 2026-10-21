@@ -895,15 +895,20 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          # Fontconfig requires Expat and FreeType.
+          # Verify the static dependencies before configuring.
           test -s "$DEPS/lib/libexpat.a"
           test -s "$DEPS/lib/libfreetype.a"
           test -s "$DEPS/lib/pkgconfig/expat.pc"
           test -s "$DEPS/lib/pkgconfig/freetype2.pc"
 
+          echo "=== Verify dependencies ==="
+          pkg-config --modversion expat
+          pkg-config --modversion freetype2
+
           git clone --depth 1 --branch "$VERSION" \
             https://gitlab.freedesktop.org/fontconfig/fontconfig.git "$SRC"
 
+          echo "=== Configure Fontconfig ==="
           meson setup "$BUILD" "$SRC" \
             --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
             --prefix "$DEPS" \
@@ -914,18 +919,23 @@ jobs:
             -Dtests=disabled \
             -Dtools=disabled \
             -Dcache-build=disabled \
-            -Dxml=expat \
+            -Dxml-backend=expat \
             -Diconv=disabled \
             -Dnls=disabled
 
+          echo "=== Build Fontconfig ==="
           ninja -C "$BUILD" -j"$BUILD_JOBS"
+
+          echo "=== Install Fontconfig ==="
           ninja -C "$BUILD" install
 
+          echo "=== Verify Fontconfig ==="
           test -s "$DEPS/lib/libfontconfig.a"
           test -s "$DEPS/lib/pkgconfig/fontconfig.pc"
           pkg-config --modversion fontconfig
+          pkg-config --cflags fontconfig
           echo "Fontconfig built successfully"
-
+          
       - name: Build OpenJPEG
         shell: bash
         run: |
