@@ -1036,15 +1036,17 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          # Theora requires Ogg.
+          echo "=== Verify Ogg dependency ==="
           test -s "$DEPS/lib/libogg.a"
           test -s "$DEPS/lib/pkgconfig/ogg.pc"
 
-          # Download and verify the official Theora source archive.
+          echo "=== Download Theora ${VERSION} ==="
           curl -fL --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 120 \
             "https://downloads.xiph.org/releases/theora/libtheora-${VERSION}.tar.bz2" \
             -o "$ARCHIVE"
 
+          echo "=== Verify Theora source checksum ==="
           echo "b6ae1ee2fa3d42ac489287d3ec34c5885730b1296f0801ae577a35193d3affbc  $ARCHIVE" \
             | sha256sum -c -
 
@@ -1053,41 +1055,30 @@ jobs:
           tar -xjf "$ARCHIVE" --strip-components=1 -C "$SRC"
           cd "$SRC"
 
-          # Download GNU config helpers. Savannah is the primary source;
-          # the GNU gitweb endpoint is the fallback.
-          download_config_helper() {
-            local filename="$1"
-            local destination="./$filename"
-            local tmp="${destination}.download"
+          echo "=== Download GNU config helpers from GitHub mirror ==="
 
-            rm -f "$tmp"
+          curl -fL --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 60 \
+            "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" \
+            -o ./config.sub
 
-            if ! curl -fL --retry 2 --retry-all-errors \
-              "https://git.savannah.gnu.org/cgit/config.git/plain/${filename}" \
-              -o "$tmp"; then
-              rm -f "$tmp"
-              echo "Primary GNU helper URL failed; trying fallback for ${filename}"
+          curl -fL --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 60 \
+            "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess" \
+            -o ./config.guess
 
-              curl -fL --retry 3 --retry-all-errors \
-                "https://git.savannah.gnu.org/gitweb/?p=config.git;a=blob_plain;f=${filename};hb=HEAD" \
-                -o "$tmp"
-            fi
+          test -s ./config.sub
+          test -s ./config.guess
 
-            test -s "$tmp"
+          head -n 1 ./config.sub | grep -q '^#!'
+          head -n 1 ./config.guess | grep -q '^#!'
 
-            # Reject HTML error pages or other invalid downloads.
-            head -n 1 "$tmp" | grep -q '^#!'
+          chmod +x ./config.sub ./config.guess
 
-            chmod +x "$tmp"
-            mv "$tmp" "$destination"
-          }
-
-          download_config_helper config.sub
-          download_config_helper config.guess
-
-          # Verify that the helper accepts the Android target.
+          echo "=== Verify Android target recognition ==="
           ./config.sub aarch64-linux-android
 
+          echo "=== Configure Theora ==="
           ./configure \
             --build=x86_64-linux-gnu \
             --host=aarch64-linux-android \
@@ -1103,20 +1094,23 @@ jobs:
             RANLIB="$RANLIB" \
             CFLAGS="-O2 -fPIC"
 
+          echo "=== Compile Theora ==="
           make -j"$BUILD_JOBS"
+
+          echo "=== Install Theora ==="
           make install
 
-          echo "=== Theora static libraries ==="
+          echo "=== Verify Theora static libraries ==="
           find "$DEPS/lib" -maxdepth 2 -type f -name '*theora*.a' -print
 
           test -s "$DEPS/lib/libtheoradec.a"
           test -s "$DEPS/lib/libtheoraenc.a"
 
-          echo "=== Theora pkg-config files ==="
+          echo "=== Verify Theora pkg-config files ==="
           find "$DEPS/lib/pkgconfig" -maxdepth 1 -iname '*theora*.pc' -print
 
           echo "Theora built successfully"
-
+          
       - name: Build libass
         shell: bash
         run: |
