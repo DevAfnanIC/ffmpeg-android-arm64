@@ -848,22 +848,18 @@ jobs:
           echo "FFmpeg built and installed successfully."
           echo "The Android ARM64 binary will be tested on Android, not on the Linux runner."
 
+
       - name: Verify FFmpeg configuration and encoders
         shell: bash
         run: |
           set -euo pipefail
 
           FFMPEG="$PREFIX/bin/ffmpeg"
-          FFMPEG_SRC="$RUNNER_TEMP/ffmpeg"
 
           echo "=== Verify installed FFmpeg binary ==="
-          if [[ ! -s "$FFMPEG" ]]; then
-            echo "ERROR: FFmpeg binary not found: $FFMPEG"
-            exit 1
-          fi
-
-          file "$FFMPEG"
+          test -s "$FFMPEG"
           test -x "$FFMPEG"
+          file "$FFMPEG"
 
           echo "=== Verify ELF architecture ==="
           "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
@@ -872,33 +868,39 @@ jobs:
           "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
             | grep -qE 'Machine:.*AArch64'
 
-          echo "=== Locate FFmpeg configuration files ==="
-          CONFIG="$FFMPEG_SRC/config.h"
-          CONFIG_MK="$FFMPEG_SRC/config.mak"
+          echo "=== Find FFmpeg configuration files ==="
+          find "$RUNNER_TEMP" -maxdepth 6 \
+            \( -name config.h -o -name config.mak \) -print
 
-          if [[ ! -s "$CONFIG" ]]; then
-            echo "WARNING: config.h missing at $CONFIG"
-            find "$RUNNER_TEMP" -maxdepth 5 -name config.h -print
-          fi
-
-          if [[ ! -s "$CONFIG_MK" ]]; then
-            echo "WARNING: config.mak missing at $CONFIG_MK"
-            find "$RUNNER_TEMP" -maxdepth 5 -name config.mak -print
-          fi
+          CONFIG="$RUNNER_TEMP/ffmpeg/config.h"
+          CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
 
           if [[ ! -s "$CONFIG" || ! -s "$CONFIG_MK" ]]; then
-            echo "ERROR: FFmpeg configuration files could not be found."
-            echo "Check the source directory used in the Build FFmpeg step."
-            exit 1
+            echo "WARNING: expected config files were not found."
+            echo "Checking the installed FFmpeg build configuration instead."
+
+            if [[ -s "$RUNNER_TEMP/ffmpeg/ffbuild/config.mak" ]]; then
+              CONFIG_MK="$RUNNER_TEMP/ffmpeg/ffbuild/config.mak"
+            fi
+
+            if [[ ! -s "$CONFIG" ]]; then
+              echo "Cannot verify enabled libraries without config.h."
+              echo "Check the source directory and configure step."
+              exit 1
+            fi
+
+            if [[ ! -s "$CONFIG_MK" ]]; then
+              echo "Cannot verify enabled libraries without config.mak."
+              echo "Check the source directory and configure step."
+              exit 1
+            fi
           fi
 
           echo "=== Verify external-library configuration ==="
-
           for lib in \
             LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
             LIBFREETYPE LIBOPUS LIBVORBIS LIBMP3LAME \
             LIBTWOLAME LIBSPEEX LIBSOXR; do
-
             if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
               echo "ENABLED: $lib"
             else
@@ -906,7 +908,7 @@ jobs:
             fi
           done
 
-          echo "=== FFmpeg config.mak library flags ==="
+          echo "=== config.mak library flags ==="
           grep -E \
             '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBAOM|CONFIG_LIBDAV1D|CONFIG_LIBSVTAV1|CONFIG_LIBFREETYPE|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
             "$CONFIG_MK" || true
@@ -914,7 +916,7 @@ jobs:
           echo "=== Dynamic dependencies ==="
           "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" || true
 
-          echo "Verification completed. Android binary was not executed on Ubuntu."
+          echo "Verification completed."
           
       - name: Package Android ARM64 build
         shell: bash
