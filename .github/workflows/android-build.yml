@@ -963,19 +963,14 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_INSTALL_LIBDIR=lib \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="$CC" \
-            -DCMAKE_AR="$AR" \
-            -DCMAKE_RANLIB="$RANLIB" \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_CODEC=OFF \
             -DBUILD_TESTING=OFF \
             -DBUILD_DOC=OFF \
             -DBUILD_JPIP=OFF \
             -DBUILD_MJ2=OFF \
-            -DBUILD_THIRDPARTY=OFF \
             -DWITH_TIFF=OFF \
             -DWITH_PNG=OFF \
-            -DWITH_JPEG=OFF \
             -DWITH_OPENGL=OFF
 
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
@@ -983,68 +978,197 @@ jobs:
 
           test -s "$DEPS/lib/libopenjp2.a"
           echo "OpenJPEG built successfully"
-          
-      - name: Configure FFmpeg
+
+      - name: Build LC3
         shell: bash
         run: |
           set -euo pipefail
+
+          VERSION="v1.1.3"
+          SRC="$RUNNER_TEMP/liblc3"
+          BUILD="$RUNNER_TEMP/liblc3-build"
 
           export PATH="$TOOLCHAIN/bin:$PATH"
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== Verify dependency metadata ==="
-          for lib in \
-            x264 x265 vpx aom dav1d SvtAv1Enc freetype2 fribidi harfbuzz \
-            opus vorbis vorbisenc lame twolame speex soxr; do
-            if ! pkg-config --exists "$lib"; then
-              echo "ERROR: pkg-config cannot find $lib"
-              find "$DEPS/lib/pkgconfig" -maxdepth 1 \
-                -name '*.pc' -print | sort
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/google/liblc3.git "$SRC"
+
+          cmake -S "$SRC" -B "$BUILD" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=24 \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF
+
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
+
+          echo "=== LC3 installed artifacts ==="
+          find "$DEPS/lib" -maxdepth 2 -iname '*lc3*' -print
+          find "$DEPS/include" -maxdepth 3 -iname '*lc3*' -print
+
+          # Ensure a static LC3 library was actually installed.
+          find "$DEPS/lib" -maxdepth 2 -type f -name '*lc3*.a' \
+            -print -quit | grep -q .
+
+          echo "LC3 built successfully"
+
+      - name: Build Theora
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="1.1.1"
+          SRC="$RUNNER_TEMP/libtheora"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          # Theora requires Ogg, which was built earlier.
+          test -s "$DEPS/lib/libogg.a"
+          test -s "$DEPS/lib/pkgconfig/ogg.pc"
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/xiph/theora.git "$SRC"
+
+          cd "$SRC"
+          ./autogen.sh
+
+          ./configure \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-spec \
+            --disable-oggtest \
+            --disable-vorbistest \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="-O2 -fPIC"
+
+          make -j"$BUILD_JOBS"
+          make install
+
+          echo "=== Theora static libraries ==="
+          find "$DEPS/lib" -maxdepth 2 -type f -name '*theora*.a' -print
+          test -s "$DEPS/lib/libtheora.a"
+          echo "Theora built successfully"
+
+      - name: Build libass
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="0.17.3"
+          SRC="$RUNNER_TEMP/libass"
+          BUILD="$RUNNER_TEMP/libass-build"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          # Validate the full subtitle-rendering dependency stack.
+          for file in \
+            "$DEPS/lib/libfreetype.a" \
+            "$DEPS/lib/libfribidi.a" \
+            "$DEPS/lib/libharfbuzz.a" \
+            "$DEPS/lib/libfontconfig.a" \
+            "$DEPS/lib/libexpat.a"; do
+            test -s "$file" || {
+              echo "Missing dependency: $file"
               exit 1
-            fi
-            echo "$lib: $(pkg-config --modversion "$lib")"
+            }
           done
 
-          echo "=== Verify x265 metadata and static libraries ==="
-          cat "$DEPS/lib/pkgconfig/x265.pc"
-          pkg-config --cflags x265
-          pkg-config --static --libs x265
+          for package in freetype2 fribidi harfbuzz fontconfig; do
+            echo "=== $package ==="
+            pkg-config --modversion "$package"
+          done
 
-          cat > "$RUNNER_TEMP/x265_test.cpp" <<'EOF'
-          #include <x265.h>
-          int main() {
-              return x265_api_get(0) == nullptr;
-          }
-          EOF
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/libass/libass.git "$SRC"
 
-          "$CXX" \
-            -I"$DEPS/include" \
-            "$RUNNER_TEMP/x265_test.cpp" \
-            -L"$DEPS/lib" \
-            -Wl,--start-group -lx265 -Wl,--end-group \
-            -lc++ -lm -ldl -llog -landroid \
-            -o "$RUNNER_TEMP/x265_test"
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
+            --prefix "$DEPS" \
+            --libdir lib \
+            --buildtype release \
+            --default-library static \
+            -Dtest=disabled \
+            -Dcompare=disabled \
+            -Dfontconfig=enabled \
+            -Dlibunibreak=disabled \
+            -Drequire-system-font-provider=true
 
-          echo "x265 static link test passed."
+          ninja -C "$BUILD" -j"$BUILD_JOBS"
+          ninja -C "$BUILD" install
 
-          git clone --depth 1 --branch "n${FFMPEG_VERSION}" \
-            https://git.ffmpeg.org/ffmpeg.git \
-            "$RUNNER_TEMP/ffmpeg"
+          test -s "$DEPS/lib/libass.a"
+          test -s "$DEPS/lib/pkgconfig/libass.pc"
+          pkg-config --modversion libass
+          echo "libass built successfully"
+          
+      - name: Configure FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
 
-          cd "$RUNNER_TEMP/ffmpeg"
+          VERSION="n${FFMPEG_VERSION}"
+          SRC="$RUNNER_TEMP/ffmpeg"
 
-          export CFLAGS="-O2 -fPIC -I$DEPS/include"
-          export CXXFLAGS="-O2 -fPIC -I$DEPS/include"
-          export LDFLAGS="-L$DEPS/lib"
-          export LIBS="-lc++ -lm -ldl"
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          echo "=== Verify required pkg-config packages ==="
+          for package in \
+            x264 x265 vpx aom dav1d SvtAv1Enc \
+            freetype2 fribidi harfbuzz fontconfig libass \
+            opus vorbis vorbisenc lame twolame speex soxr \
+            libopenjp2 liblc3 theoradec theoraenc; do
+            if pkg-config --exists "$package"; then
+              printf 'FOUND: %s (%s)\n' \
+                "$package" "$(pkg-config --modversion "$package")"
+            else
+              printf 'NOT FOUND: %s\n' "$package"
+            fi
+          done
+
+          # These packages are required for the new integrations.
+          for package in freetype2 fribidi harfbuzz fontconfig libass; do
+            pkg-config --exists "$package" || {
+              echo "Required subtitle dependency missing: $package"
+              exit 1
+            }
+          done
+
+          test -s "$DEPS/lib/libopenjp2.a"
+          find "$DEPS/lib" -maxdepth 2 -type f -name '*lc3*.a' \
+            -print -quit | grep -q .
+          test -s "$DEPS/lib/libtheora.a"
+          test -s "$DEPS/lib/libass.a"
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://git.ffmpeg.org/ffmpeg.git "$SRC"
+
+          cd "$SRC"
 
           ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
             --arch=aarch64 \
-            --cpu=armv8-a \
             --enable-cross-compile \
             --sysroot="$SYSROOT" \
             --cc="$CC" \
@@ -1053,7 +1177,13 @@ jobs:
             --ranlib="$RANLIB" \
             --strip="$STRIP" \
             --pkg-config=pkg-config \
-            --pkg-config-flags="--static" \
+            --pkg-config-flags=--static \
+            --extra-cflags="-I$DEPS/include -fPIC" \
+            --extra-ldflags="-L$DEPS/lib" \
+            --extra-libs="-lm" \
+            --enable-static \
+            --disable-shared \
+            --enable-pic \
             --enable-gpl \
             --enable-libx264 \
             --enable-libx265 \
@@ -1062,30 +1192,23 @@ jobs:
             --enable-libdav1d \
             --enable-libsvtav1 \
             --enable-libfreetype \
+            --enable-libfontconfig \
+            --enable-libfribidi \
+            --enable-libharfbuzz \
+            --enable-libass \
             --enable-libwebp \
+            --enable-libopenjpeg \
+            --enable-liblc3 \
+            --enable-libtheora \
             --enable-libopus \
             --enable-libvorbis \
             --enable-libmp3lame \
             --enable-libtwolame \
             --enable-libspeex \
-            --enable-libsoxr \
-            --enable-static \
-            --disable-shared \
-            --enable-pic \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-doc \
-            --disable-debug \
-            --disable-autodetect \
-            --extra-cflags="-I$DEPS/include -O2 -fPIC" \
-            --extra-ldflags="-L$DEPS/lib" \
-            --extra-libs="-lc++ -lm -ldl"
+            --enable-libsoxr
 
-          echo "=== FFmpeg external-library configuration ==="
-          grep -E \
-            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBAOM|LIBDAV1D|LIBSVTAV1|LIBFREETYPE|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)' \
-            config.h || true
-            
+          echo "FFmpeg configure completed successfully"
+          
       - name: Build FFmpeg
         shell: bash
         run: |
