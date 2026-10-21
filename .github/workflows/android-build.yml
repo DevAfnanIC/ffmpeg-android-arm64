@@ -1028,22 +1028,29 @@ jobs:
           set -euo pipefail
 
           VERSION="1.1.1"
-          SRC="$RUNNER_TEMP/libtheora"
+          SRC="$RUNNER_TEMP/libtheora-src"
+          ARCHIVE="$RUNNER_TEMP/libtheora-${VERSION}.tar.bz2"
 
           export PATH="$TOOLCHAIN/bin:$PATH"
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          # Theora requires Ogg, which was built earlier.
+          # Theora requires Ogg.
           test -s "$DEPS/lib/libogg.a"
           test -s "$DEPS/lib/pkgconfig/ogg.pc"
 
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/xiph/theora.git "$SRC"
+          curl -fL \
+            "https://downloads.xiph.org/releases/theora/libtheora-${VERSION}.tar.bz2" \
+            -o "$ARCHIVE"
 
+          # Verify the official release archive checksum.
+          echo "b6ae1ee2fa3d42ac489287d3ec34c5885730b1296f0801ae577a35193d3affbc  $ARCHIVE" \
+            | sha256sum -c -
+
+          mkdir -p "$SRC"
+          tar -xjf "$ARCHIVE" --strip-components=1 -C "$SRC"
           cd "$SRC"
-          ./autogen.sh
 
           ./configure \
             --host=aarch64-linux-android \
@@ -1064,9 +1071,16 @@ jobs:
 
           echo "=== Theora static libraries ==="
           find "$DEPS/lib" -maxdepth 2 -type f -name '*theora*.a' -print
-          test -s "$DEPS/lib/libtheora.a"
-          echo "Theora built successfully"
 
+          # Verify the expected decoder and encoder libraries.
+          test -s "$DEPS/lib/libtheoradec.a"
+          test -s "$DEPS/lib/libtheoraenc.a"
+
+          echo "=== Theora pkg-config files ==="
+          find "$DEPS/lib/pkgconfig" -maxdepth 1 -iname '*theora*.pc' -print
+
+          echo "Theora built successfully"
+          
       - name: Build libass
         shell: bash
         run: |
