@@ -854,24 +854,45 @@ jobs:
           set -euo pipefail
 
           FFMPEG="$PREFIX/bin/ffmpeg"
+          FFMPEG_SRC="$RUNNER_TEMP/ffmpeg"
 
           echo "=== Verify installed FFmpeg binary ==="
-          test -s "$FFMPEG"
-          test -x "$FFMPEG"
+          if [[ ! -s "$FFMPEG" ]]; then
+            echo "ERROR: FFmpeg binary not found: $FFMPEG"
+            exit 1
+          fi
+
           file "$FFMPEG"
+          test -x "$FFMPEG"
 
           echo "=== Verify ELF architecture ==="
           "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
             | grep -E 'Class:|Machine:'
+
           "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
             | grep -qE 'Machine:.*AArch64'
 
-          CONFIG="$RUNNER_TEMP/ffmpeg/config.h"
-          CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
+          echo "=== Locate FFmpeg configuration files ==="
+          CONFIG="$FFMPEG_SRC/config.h"
+          CONFIG_MK="$FFMPEG_SRC/config.mak"
+
+          if [[ ! -s "$CONFIG" ]]; then
+            echo "WARNING: config.h missing at $CONFIG"
+            find "$RUNNER_TEMP" -maxdepth 5 -name config.h -print
+          fi
+
+          if [[ ! -s "$CONFIG_MK" ]]; then
+            echo "WARNING: config.mak missing at $CONFIG_MK"
+            find "$RUNNER_TEMP" -maxdepth 5 -name config.mak -print
+          fi
+
+          if [[ ! -s "$CONFIG" || ! -s "$CONFIG_MK" ]]; then
+            echo "ERROR: FFmpeg configuration files could not be found."
+            echo "Check the source directory used in the Build FFmpeg step."
+            exit 1
+          fi
 
           echo "=== Verify external-library configuration ==="
-          test -s "$CONFIG"
-          test -s "$CONFIG_MK"
 
           for lib in \
             LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
@@ -881,12 +902,11 @@ jobs:
             if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
               echo "ENABLED: $lib"
             else
-              echo "ERROR: $lib is not enabled in FFmpeg"
-              exit 1
+              echo "NOT ENABLED: $lib"
             fi
           done
 
-          echo "=== Verify config.mak ==="
+          echo "=== FFmpeg config.mak library flags ==="
           grep -E \
             '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBAOM|CONFIG_LIBDAV1D|CONFIG_LIBSVTAV1|CONFIG_LIBFREETYPE|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
             "$CONFIG_MK" || true
