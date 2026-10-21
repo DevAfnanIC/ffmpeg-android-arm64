@@ -1044,15 +1044,30 @@ jobs:
             "https://downloads.xiph.org/releases/theora/libtheora-${VERSION}.tar.bz2" \
             -o "$ARCHIVE"
 
-          # Verify the official release archive checksum.
           echo "b6ae1ee2fa3d42ac489287d3ec34c5885730b1296f0801ae577a35193d3affbc  $ARCHIVE" \
             | sha256sum -c -
 
+          rm -rf "$SRC"
           mkdir -p "$SRC"
           tar -xjf "$ARCHIVE" --strip-components=1 -C "$SRC"
           cd "$SRC"
 
+          # Refresh obsolete Autoconf target-triplet helpers.
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends automake
+
+          CONFIG_DIR="$(find /usr/share -type f -path '*/config/config.sub' -print -quit)"
+          GUESS_DIR="$(find /usr/share -type f -path '*/config/config.guess' -print -quit)"
+
+          test -s "$CONFIG_DIR"
+          test -s "$GUESS_DIR"
+
+          cp "$CONFIG_DIR" ./config.sub
+          cp "$GUESS_DIR" ./config.guess
+          chmod +x ./config.sub ./config.guess
+
           ./configure \
+            --build=x86_64-linux-gnu \
             --host=aarch64-linux-android \
             --prefix="$DEPS" \
             --enable-static \
@@ -1072,7 +1087,6 @@ jobs:
           echo "=== Theora static libraries ==="
           find "$DEPS/lib" -maxdepth 2 -type f -name '*theora*.a' -print
 
-          # Verify the expected decoder and encoder libraries.
           test -s "$DEPS/lib/libtheoradec.a"
           test -s "$DEPS/lib/libtheoraenc.a"
 
