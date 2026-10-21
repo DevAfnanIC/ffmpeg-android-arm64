@@ -711,6 +711,109 @@ jobs:
           test -s "$DEPS/lib/libfreetype.a"
           test -s "$DEPS/lib/pkgconfig/freetype2.pc"
           echo "FreeType built and installed successfully"
+
+
+      - name: Build FriBidi
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="v1.0.16"
+          SRC="$RUNNER_TEMP/fribidi"
+          BUILD="$RUNNER_TEMP/fribidi-build"
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/fribidi/fribidi.git "$SRC"
+
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
+            --prefix "$DEPS" \
+            --libdir lib \
+            --buildtype release \
+            --default-library static \
+            -Ddocs=false \
+            -Dtests=false \
+            -Dbin=false
+
+          ninja -C "$BUILD" -j"$BUILD_JOBS"
+          ninja -C "$BUILD" install
+
+          test -s "$DEPS/lib/libfribidi.a"
+          test -s "$DEPS/lib/pkgconfig/fribidi.pc"
+          echo "FriBidi built successfully"
+
+
+      - name: Build HarfBuzz
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="10.2.0"
+          SRC="$RUNNER_TEMP/harfbuzz"
+          BUILD="$RUNNER_TEMP/harfbuzz-build"
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/harfbuzz/harfbuzz.git "$SRC"
+
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
+            --prefix "$DEPS" \
+            --libdir lib \
+            --buildtype release \
+            --default-library static \
+            -Ddocs=disabled \
+            -Dtests=disabled \
+            -Dintrospection=disabled \
+            -Dglib=disabled \
+            -Dcairo=disabled \
+            -Dicu=disabled \
+            -Dfreetype=enabled \
+            -Dgraphite2=disabled
+
+          ninja -C "$BUILD" -j"$BUILD_JOBS"
+          ninja -C "$BUILD" install
+
+          test -s "$DEPS/lib/libharfbuzz.a"
+          test -s "$DEPS/lib/pkgconfig/harfbuzz.pc"
+          echo "HarfBuzz built successfully"
+
+
+      - name: Build libwebp
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="v1.5.0"
+          SRC="$RUNNER_TEMP/libwebp"
+          BUILD="$RUNNER_TEMP/libwebp-build"
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/webmproject/libwebp.git "$SRC"
+
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWEBP_BUILD_ANIM_UTILS=OFF \
+            -DWEBP_BUILD_CWEBP=OFF \
+            -DWEBP_BUILD_DWEBP=OFF \
+            -DWEBP_BUILD_GIF2WEBP=OFF \
+            -DWEBP_BUILD_IMG2WEBP=OFF \
+            -DWEBP_BUILD_VWEBP=OFF \
+            -DWEBP_BUILD_WEBPINFO=OFF \
+            -DWEBP_BUILD_LIBWEBPMUX=ON \
+            -DWEBP_BUILD_EXTRAS=OFF
+
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
+
+          test -s "$DEPS/lib/libwebp.a"
+          echo "libwebp built successfully"
           
       - name: Configure FFmpeg
         shell: bash
@@ -724,7 +827,7 @@ jobs:
 
           echo "=== Verify dependency metadata ==="
           for lib in \
-            x264 x265 vpx aom dav1d SvtAv1Enc freetype2 \
+            x264 x265 vpx aom dav1d SvtAv1Enc freetype2 fribidi harfbuzz \
             opus vorbis vorbisenc lame twolame speex soxr; do
             if ! pkg-config --exists "$lib"; then
               echo "ERROR: pkg-config cannot find $lib"
@@ -789,6 +892,8 @@ jobs:
             --enable-libaom \
             --enable-libdav1d \
             --enable-libsvtav1 \
+            --enable-libfreetype \
+            --enable-libwebp \
             --enable-libfreetype \
             --enable-libopus \
             --enable-libvorbis \
