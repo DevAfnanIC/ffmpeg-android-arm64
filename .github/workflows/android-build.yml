@@ -594,11 +594,12 @@ jobs:
           DAV1D_VERSION="1.5.1"
           SRC="$RUNNER_TEMP/dav1d"
           BUILD="$RUNNER_TEMP/dav1d-build"
+          CROSS_FILE="$RUNNER_TEMP/dav1d-cross.ini"
 
           git clone --depth 1 --branch "$DAV1D_VERSION" \
             https://code.videolan.org/videolan/dav1d.git "$SRC"
 
-          cat > "$RUNNER_TEMP/dav1d-cross.ini" <<EOF
+          cat > "$CROSS_FILE" <<EOF
           [binaries]
           c = '$CC'
           ar = '$AR'
@@ -616,29 +617,29 @@ jobs:
 
           [built-in options]
           c_args = ['-fPIC']
-          c_link_args = []
-
-          [project options]
           EOF
 
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
           meson setup "$BUILD" "$SRC" \
-            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
-            --prefix "$PREFIX" \
+            --cross-file "$CROSS_FILE" \
+            --prefix "$DEPS" \
             --libdir lib \
             --buildtype release \
             --default-library static \
             -Denable_tools=false \
-            -Denable_tests=false \
-            -Ddefault_library=static \
-            -Dtrim_dsp=false
+            -Denable_tests=false
 
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           ninja -C "$BUILD" install
 
-          test -f "$PREFIX/lib/libdav1d.a"
-          test -f "$PREFIX/lib/pkgconfig/dav1d.pc"
+          echo "=== Verify dav1d ==="
+          test -s "$DEPS/lib/libdav1d.a"
+          test -s "$DEPS/lib/pkgconfig/dav1d.pc"
           echo "dav1d built and installed successfully"
-
+          
       - name: Build SVT-AV1
         shell: bash
         run: |
@@ -646,30 +647,36 @@ jobs:
 
           SVT_VERSION="v2.3.0"
           SRC="$RUNNER_TEMP/SVT-AV1"
+          BUILD="$RUNNER_TEMP/svt-av1-build"
 
           git clone --depth 1 --branch "$SVT_VERSION" \
             https://gitlab.com/AOMediaCodec/SVT-AV1.git "$SRC"
 
-          cmake -S "$SRC" -B "$RUNNER_TEMP/svt-av1-build" \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_APPS=OFF \
-            -DBUILD_TESTING=OFF \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+            -DBUILD_TESTING=OFF
 
-          cmake --build "$RUNNER_TEMP/svt-av1-build" \
-            --parallel "$BUILD_JOBS"
-          cmake --install "$RUNNER_TEMP/svt-av1-build"
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
 
-          test -f "$PREFIX/lib/libSvtAv1Enc.a"
-          test -f "$PREFIX/lib/pkgconfig/SvtAv1Enc.pc"
+          echo "=== Verify SVT-AV1 ==="
+          find "$DEPS/lib" -maxdepth 2 \
+            \( -iname '*svt*av1*.a' -o -iname '*svt*av1*.pc' \) \
+            -print
+
+          test -s "$DEPS/lib/libSvtAv1Enc.a"
+          test -s "$DEPS/lib/pkgconfig/SvtAv1Enc.pc"
+
           echo "SVT-AV1 built and installed successfully"
-
+          
       - name: Build FreeType
         shell: bash
         run: |
@@ -677,31 +684,32 @@ jobs:
 
           FREETYPE_VERSION="VER-2-13-3"
           SRC="$RUNNER_TEMP/freetype"
+          BUILD="$RUNNER_TEMP/freetype-build"
 
           git clone --depth 1 --branch "$FREETYPE_VERSION" \
             https://github.com/freetype/freetype.git "$SRC"
 
-          cmake -S "$SRC" -B "$RUNNER_TEMP/freetype-build" \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/build/cmake/android.toolchain.cmake" \
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_INSTALL_LIBDIR=lib \
-            -DBUILD_SHARED_LIBS=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
             -DFT_DISABLE_ZLIB=TRUE \
             -DFT_DISABLE_BZIP2=TRUE \
             -DFT_DISABLE_PNG=TRUE \
             -DFT_DISABLE_HARFBUZZ=TRUE \
             -DFT_DISABLE_BROTLI=TRUE
 
-          cmake --build "$RUNNER_TEMP/freetype-build" \
-            --parallel "$BUILD_JOBS"
-          cmake --install "$RUNNER_TEMP/freetype-build"
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
 
-          test -f "$PREFIX/lib/libfreetype.a"
-          test -f "$PREFIX/lib/pkgconfig/freetype2.pc"
+          echo "=== Verify FreeType ==="
+          test -s "$DEPS/lib/libfreetype.a"
+          test -s "$DEPS/lib/pkgconfig/freetype2.pc"
           echo "FreeType built and installed successfully"
           
       - name: Configure FFmpeg
@@ -709,26 +717,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          export PATH="$TOOLCHAIN/bin:$PATH"
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== pkg-config library checks ==="
-          for lib in x264 x265 vpx aom dav1d SvtAv1Enc freetype2 opus vorbis vorbisenc \
-            lame twolame speex soxr; do
+          echo "=== Verify dependency metadata ==="
+          for lib in \
+            x264 x265 vpx aom dav1d SvtAv1Enc freetype2 \
+            opus vorbis vorbisenc lame twolame speex soxr; do
             if ! pkg-config --exists "$lib"; then
-              echo "pkg-config cannot find: $lib"
+              echo "ERROR: pkg-config cannot find $lib"
+              find "$DEPS/lib/pkgconfig" -maxdepth 1 \
+                -name '*.pc' -print | sort
               exit 1
             fi
             echo "$lib: $(pkg-config --modversion "$lib")"
           done
 
-          echo "=== x265 metadata ==="
+          echo "=== Verify x265 metadata and static libraries ==="
           cat "$DEPS/lib/pkgconfig/x265.pc"
           pkg-config --cflags x265
           pkg-config --static --libs x265
 
-          echo "=== x265 static C++ link test ==="
           cat > "$RUNNER_TEMP/x265_test.cpp" <<'EOF'
           #include <x265.h>
           int main() {
@@ -799,9 +810,9 @@ jobs:
 
           echo "=== FFmpeg external-library configuration ==="
           grep -E \
-            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBAOM|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)' \
-             config.h || true
-
+            'CONFIG_(LIBX264|LIBX265|LIBVPX|LIBAOM|LIBDAV1D|LIBSVTAV1|LIBFREETYPE|LIBOPUS|LIBVORBIS|LIBMP3LAME|LIBTWOLAME|LIBSPEEX|LIBSOXR)' \
+            config.h || true
+            
       - name: Build FFmpeg
         shell: bash
         run: |
@@ -837,7 +848,6 @@ jobs:
           echo "FFmpeg built and installed successfully."
           echo "The Android ARM64 binary will be tested on Android, not on the Linux runner."
 
-
       - name: Verify FFmpeg configuration and encoders
         shell: bash
         run: |
@@ -847,73 +857,44 @@ jobs:
 
           echo "=== Verify installed FFmpeg binary ==="
           test -s "$FFMPEG"
+          test -x "$FFMPEG"
           file "$FFMPEG"
 
           echo "=== Verify ELF architecture ==="
           "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
             | grep -E 'Class:|Machine:'
-
           "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
             | grep -qE 'Machine:.*AArch64'
 
-          echo "=== Locate FFmpeg configuration files ==="
+          CONFIG="$RUNNER_TEMP/ffmpeg/config.h"
+          CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
 
-          CONFIG=""
-          CONFIG_MK=""
+          echo "=== Verify external-library configuration ==="
+          test -s "$CONFIG"
+          test -s "$CONFIG_MK"
 
-          for dir in \
-            "$RUNNER_TEMP/ffmpeg" \
-            "$RUNNER_TEMP/ffmpeg-source" \
-            "$GITHUB_WORKSPACE/ffmpeg" \
-            "$GITHUB_WORKSPACE"; do
+          for lib in \
+            LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
+            LIBFREETYPE LIBOPUS LIBVORBIS LIBMP3LAME \
+            LIBTWOLAME LIBSPEEX LIBSOXR; do
 
-            if [[ -z "$CONFIG" && -s "$dir/config.h" ]]; then
-              CONFIG="$dir/config.h"
-            fi
-
-            if [[ -z "$CONFIG_MK" && -s "$dir/config.mak" ]]; then
-              CONFIG_MK="$dir/config.mak"
+            if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
+              echo "ENABLED: $lib"
+            else
+              echo "ERROR: $lib is not enabled in FFmpeg"
+              exit 1
             fi
           done
 
-          if [[ -z "$CONFIG" || -z "$CONFIG_MK" ]]; then
-            find "$RUNNER_TEMP" "$GITHUB_WORKSPACE" \
-              -maxdepth 5 -type f \
-              \( -name config.h -o -name config.mak \) \
-              -print 2>/dev/null || true
-
-            echo "WARNING: FFmpeg configuration files were not found."
-            echo "The installed binary and its architecture were verified."
-            echo "Skipping source-configuration checks."
-          else
-            echo "config.h: $CONFIG"
-            echo "config.mak: $CONFIG_MK"
-
-            echo "=== External-library configuration ==="
-
-            for lib in \
-              LIBX264 LIBX265 LIBVPX LIBAOM LIBOPUS LIBVORBIS \
-              LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
-
-              if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
-                echo "ENABLED: $lib"
-              else
-                echo "NOT ENABLED: $lib"
-              fi
-            done
-
-            echo "=== Configuration in config.mak ==="
-
-            grep -E \
-              '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBAOM|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
-              "$CONFIG_MK" || true
-          fi
+          echo "=== Verify config.mak ==="
+          grep -E \
+            '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBAOM|CONFIG_LIBDAV1D|CONFIG_LIBSVTAV1|CONFIG_LIBFREETYPE|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
+            "$CONFIG_MK" || true
 
           echo "=== Dynamic dependencies ==="
           "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" || true
 
-          echo "=== Verification completed ==="
-          echo "The Android binary was inspected, not executed on Ubuntu."
+          echo "Verification completed. Android binary was not executed on Ubuntu."
           
       - name: Package Android ARM64 build
         shell: bash
