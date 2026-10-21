@@ -836,6 +836,140 @@ jobs:
 
           test -s "$DEPS/lib/libwebp.a"
           echo "libwebp built successfully"
+
+
+      - name: Build Expat
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="R_2_6_4"
+          SRC="$RUNNER_TEMP/expat"
+          BUILD="$RUNNER_TEMP/expat-build"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/libexpat/libexpat.git "$SRC"
+
+          cmake -S "$SRC/expat" -B "$BUILD" \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=24 \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_AR="$AR" \
+            -DCMAKE_RANLIB="$RANLIB" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DEXPAT_SHARED_LIBS=OFF \
+            -DEXPAT_BUILD_TESTS=OFF \
+            -DEXPAT_BUILD_EXAMPLES=OFF \
+            -DEXPAT_BUILD_TOOLS=OFF \
+            -DEXPAT_BUILD_DOCS=OFF \
+            -DEXPAT_BUILD_PKGCONFIG=ON
+
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
+
+          test -s "$DEPS/lib/libexpat.a"
+          test -s "$DEPS/lib/pkgconfig/expat.pc"
+          pkg-config --modversion expat
+          echo "Expat built successfully"
+
+      - name: Build Fontconfig
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="2.15.0"
+          SRC="$RUNNER_TEMP/fontconfig"
+          BUILD="$RUNNER_TEMP/fontconfig-build"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          # Fontconfig requires Expat and FreeType.
+          test -s "$DEPS/lib/libexpat.a"
+          test -s "$DEPS/lib/libfreetype.a"
+          test -s "$DEPS/lib/pkgconfig/expat.pc"
+          test -s "$DEPS/lib/pkgconfig/freetype2.pc"
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://gitlab.freedesktop.org/fontconfig/fontconfig.git "$SRC"
+
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
+            --prefix "$DEPS" \
+            --libdir lib \
+            --buildtype release \
+            --default-library static \
+            -Ddoc=disabled \
+            -Dtests=disabled \
+            -Dtools=disabled \
+            -Dcache-build=disabled \
+            -Dxml=expat \
+            -Diconv=disabled \
+            -Dnls=disabled
+
+          ninja -C "$BUILD" -j"$BUILD_JOBS"
+          ninja -C "$BUILD" install
+
+          test -s "$DEPS/lib/libfontconfig.a"
+          test -s "$DEPS/lib/pkgconfig/fontconfig.pc"
+          pkg-config --modversion fontconfig
+          echo "Fontconfig built successfully"
+
+      - name: Build OpenJPEG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="v2.5.3"
+          SRC="$RUNNER_TEMP/openjpeg"
+          BUILD="$RUNNER_TEMP/openjpeg-build"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          git clone --depth 1 --branch "$VERSION" \
+            https://github.com/uclouvain/openjpeg.git "$SRC"
+
+          cmake -S "$SRC" -B "$BUILD" \
+            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=24 \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_AR="$AR" \
+            -DCMAKE_RANLIB="$RANLIB" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_CODEC=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_DOC=OFF \
+            -DBUILD_JPIP=OFF \
+            -DBUILD_MJ2=OFF \
+            -DBUILD_THIRDPARTY=OFF \
+            -DWITH_TIFF=OFF \
+            -DWITH_PNG=OFF \
+            -DWITH_JPEG=OFF \
+            -DWITH_OPENGL=OFF
+
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
+
+          test -s "$DEPS/lib/libopenjp2.a"
+          echo "OpenJPEG built successfully"
           
       - name: Configure FFmpeg
         shell: bash
