@@ -894,7 +894,6 @@ jobs:
             --enable-libsvtav1 \
             --enable-libfreetype \
             --enable-libwebp \
-            --enable-libfreetype \
             --enable-libopus \
             --enable-libvorbis \
             --enable-libmp3lame \
