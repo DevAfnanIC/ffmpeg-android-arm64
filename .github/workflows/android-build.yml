@@ -837,7 +837,6 @@ jobs:
           test -s "$DEPS/lib/libwebp.a"
           echo "libwebp built successfully"
 
-
       - name: Build Expat
         shell: bash
         run: |
@@ -855,16 +854,17 @@ jobs:
           git clone --depth 1 --branch "$VERSION" \
             https://github.com/libexpat/libexpat.git "$SRC"
 
+          # The Android CMake toolchain is under $NDK, not $TOOLCHAIN.
+          ANDROID_CMAKE_TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
+          test -f "$ANDROID_CMAKE_TOOLCHAIN"
+
           cmake -S "$SRC/expat" -B "$BUILD" \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_CMAKE_TOOLCHAIN" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=24 \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_INSTALL_LIBDIR=lib \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER="$CC" \
-            -DCMAKE_AR="$AR" \
-            -DCMAKE_RANLIB="$RANLIB" \
             -DBUILD_SHARED_LIBS=OFF \
             -DEXPAT_SHARED_LIBS=OFF \
             -DEXPAT_BUILD_TESTS=OFF \
@@ -880,7 +880,7 @@ jobs:
           test -s "$DEPS/lib/pkgconfig/expat.pc"
           pkg-config --modversion expat
           echo "Expat built successfully"
-
+          
       - name: Build Fontconfig
         shell: bash
         run: |
@@ -944,7 +944,7 @@ jobs:
             https://github.com/uclouvain/openjpeg.git "$SRC"
 
           cmake -S "$SRC" -B "$BUILD" \
-            -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=24 \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
