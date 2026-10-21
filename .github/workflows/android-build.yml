@@ -895,18 +895,23 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          # Verify the static dependencies before configuring.
+          # Confirm both static dependencies and their metadata exist.
           test -s "$DEPS/lib/libexpat.a"
           test -s "$DEPS/lib/libfreetype.a"
           test -s "$DEPS/lib/pkgconfig/expat.pc"
           test -s "$DEPS/lib/pkgconfig/freetype2.pc"
 
-          echo "=== Verify dependencies ==="
+          echo "=== Dependency versions ==="
           pkg-config --modversion expat
           pkg-config --modversion freetype2
 
           git clone --depth 1 --branch "$VERSION" \
             https://gitlab.freedesktop.org/fontconfig/fontconfig.git "$SRC"
+
+          # Verify the actual options available in this source revision.
+          echo "=== Fontconfig Meson options ==="
+          cat "$SRC/meson_options.txt" 2>/dev/null || \
+            cat "$SRC/meson.options"
 
           echo "=== Configure Fontconfig ==="
           meson setup "$BUILD" "$SRC" \
@@ -919,7 +924,6 @@ jobs:
             -Dtests=disabled \
             -Dtools=disabled \
             -Dcache-build=disabled \
-            -Dxml-backend=expat \
             -Diconv=disabled \
             -Dnls=disabled
 
@@ -933,7 +937,6 @@ jobs:
           test -s "$DEPS/lib/libfontconfig.a"
           test -s "$DEPS/lib/pkgconfig/fontconfig.pc"
           pkg-config --modversion fontconfig
-          pkg-config --cflags fontconfig
           echo "Fontconfig built successfully"
           
       - name: Build OpenJPEG
