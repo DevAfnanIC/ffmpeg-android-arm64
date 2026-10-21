@@ -1095,12 +1095,13 @@ jobs:
 
           echo "Theora built successfully"   
           
+
       - name: Build libass
         shell: bash
         run: |
           set -euo pipefail
 
-          VERSION="0.17.3"
+          VERSION="0.17.5"
           SRC="$RUNNER_TEMP/libass"
           BUILD="$RUNNER_TEMP/libass-build"
 
@@ -1109,7 +1110,7 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          # Validate the full subtitle-rendering dependency stack.
+          # Validate the static subtitle-rendering dependency stack.
           for file in \
             "$DEPS/lib/libfreetype.a" \
             "$DEPS/lib/libfribidi.a" \
@@ -1127,8 +1128,15 @@ jobs:
             pkg-config --modversion "$package"
           done
 
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/libass/libass.git "$SRC"
+          # Download the exact stable release tag.
+          rm -rf "$SRC" "$BUILD"
+          git init "$SRC"
+          git -C "$SRC" remote add origin https://github.com/libass/libass.git
+          git -C "$SRC" fetch --depth 1 origin "refs/tags/$VERSION"
+          git -C "$SRC" checkout --detach FETCH_HEAD
+
+          test -s "$SRC/meson.build"
+          test -s "$SRC/meson_options.txt"
 
           meson setup "$BUILD" "$SRC" \
             --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
@@ -1138,6 +1146,9 @@ jobs:
             --default-library static \
             -Dtest=disabled \
             -Dcompare=disabled \
+            -Dprofile=disabled \
+            -Dfuzz=disabled \
+            -Dcheckasm=disabled \
             -Dfontconfig=enabled \
             -Dlibunibreak=disabled \
             -Drequire-system-font-provider=true
@@ -1147,7 +1158,10 @@ jobs:
 
           test -s "$DEPS/lib/libass.a"
           test -s "$DEPS/lib/pkgconfig/libass.pc"
+
+          echo "=== Installed libass version ==="
           pkg-config --modversion libass
+
           echo "libass built successfully"
           
       - name: Configure FFmpeg
