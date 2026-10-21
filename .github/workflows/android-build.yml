@@ -996,29 +996,32 @@ jobs:
           git clone --depth 1 --branch "$VERSION" \
             https://github.com/google/liblc3.git "$SRC"
 
-          cmake -S "$SRC" -B "$BUILD" \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=24 \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_TESTING=OFF
+          # Verify this release provides its Meson build definition.
+          test -s "$SRC/meson.build"
+          test -s "$SRC/meson_options.txt"
 
-          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
-          cmake --install "$BUILD"
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
+            --prefix "$DEPS" \
+            --libdir lib \
+            --buildtype release \
+            --default-library static \
+            -Dtools=false \
+            -Dpython=false
+
+          ninja -C "$BUILD" -j"$BUILD_JOBS"
+          meson install -C "$BUILD"
 
           echo "=== LC3 installed artifacts ==="
           find "$DEPS/lib" -maxdepth 2 -iname '*lc3*' -print
           find "$DEPS/include" -maxdepth 3 -iname '*lc3*' -print
 
-          # Ensure a static LC3 library was actually installed.
-          find "$DEPS/lib" -maxdepth 2 -type f -name '*lc3*.a' \
-            -print -quit | grep -q .
+          # Verify that the static archive and public headers exist.
+          test -s "$DEPS/lib/liblc3.a"
+          test -s "$DEPS/include/lc3.h"
 
           echo "LC3 built successfully"
-
+          
       - name: Build Theora
         shell: bash
         run: |
