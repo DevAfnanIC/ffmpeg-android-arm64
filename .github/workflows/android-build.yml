@@ -1053,19 +1053,19 @@ jobs:
           cd "$SRC"
 
           # Refresh obsolete Autoconf target-triplet helpers.
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends automake
+          # Fetch current GNU config helpers to support Android AArch64.
+          curl -fL --retry 3 \
+          https://git.savannah.gnu.org/cgit/config.git/plain/config.sub \
+            -o ./config.sub
 
-          CONFIG_DIR="$(find /usr/share -type f -path '*/config/config.sub' -print -quit)"
-          GUESS_DIR="$(find /usr/share -type f -path '*/config/config.guess' -print -quit)"
+          curl -fL --retry 3 \
+          https://git.savannah.gnu.org/cgit/config.git/plain/config.guess \
+            -o ./config.guess
 
-          test -s "$CONFIG_DIR"
-          test -s "$GUESS_DIR"
-
-          cp "$CONFIG_DIR" ./config.sub
-          cp "$GUESS_DIR" ./config.guess
           chmod +x ./config.sub ./config.guess
-
+         
+# Fail early if the updated helper does not recognize the target.
+       ./config.sub aarch64-linux-android
           ./configure \
             --build=x86_64-linux-gnu \
             --host=aarch64-linux-android \
