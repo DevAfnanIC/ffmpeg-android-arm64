@@ -24,13 +24,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           sudo apt-get update
           sudo apt-get install -y \
             autoconf automake build-essential cmake curl git \
-            libtool ninja-build pkg-config python3 texinfo \
+            libtool meson ninja-build pkg-config python3 texinfo \
             yasm nasm xz-utils zlib1g-dev file
-
+            
       - name: Set up Android NDK
         shell: bash
         run: |
