@@ -1244,7 +1244,6 @@ jobs:
           echo "FFmpeg built and installed successfully."
           echo "The Android ARM64 binary will be tested on Android, not on the Linux runner."
 
-
       - name: Verify FFmpeg configuration and encoders
         shell: bash
         run: |
@@ -1269,34 +1268,33 @@ jobs:
             \( -name config.h -o -name config.mak \) -print
 
           CONFIG="$RUNNER_TEMP/ffmpeg/config.h"
-          CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
+          CONFIG_MK="$RUNNER_TEMP/ffmpeg/ffbuild/config.mak"
 
           if [[ ! -s "$CONFIG" || ! -s "$CONFIG_MK" ]]; then
-            echo "WARNING: expected config files were not found."
-            echo "Checking the installed FFmpeg build configuration instead."
-
-            if [[ -s "$RUNNER_TEMP/ffmpeg/ffbuild/config.mak" ]]; then
-              CONFIG_MK="$RUNNER_TEMP/ffmpeg/ffbuild/config.mak"
+            echo "Checking alternate config.mak location..."
+            if [[ -s "$RUNNER_TEMP/ffmpeg/config.mak" ]]; then
+              CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
             fi
+          fi
 
-            if [[ ! -s "$CONFIG" ]]; then
-              echo "Cannot verify enabled libraries without config.h."
-              echo "Check the source directory and configure step."
-              exit 1
-            fi
+          if [[ ! -s "$CONFIG" ]]; then
+            echo "ERROR: config.h not found."
+            exit 1
+          fi
 
-            if [[ ! -s "$CONFIG_MK" ]]; then
-              echo "Cannot verify enabled libraries without config.mak."
-              echo "Check the source directory and configure step."
-              exit 1
-            fi
+          if [[ ! -s "$CONFIG_MK" ]]; then
+            echo "ERROR: config.mak not found."
+            exit 1
           fi
 
           echo "=== Verify external-library configuration ==="
           for lib in \
             LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
-            LIBFREETYPE LIBOPUS LIBVORBIS LIBMP3LAME \
+            LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
+            LIBOPENJPEG LIBLC3 LIBTHEORA \
+            LIBWEBP LIBOPUS LIBVORBIS LIBMP3LAME \
             LIBTWOLAME LIBSPEEX LIBSOXR; do
+
             if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
               echo "ENABLED: $lib"
             else
@@ -1306,7 +1304,7 @@ jobs:
 
           echo "=== config.mak library flags ==="
           grep -E \
-            '^(CONFIG_LIBX264|CONFIG_LIBX265|CONFIG_LIBVPX|CONFIG_LIBAOM|CONFIG_LIBDAV1D|CONFIG_LIBSVTAV1|CONFIG_LIBFREETYPE|CONFIG_LIBOPUS|CONFIG_LIBVORBIS|CONFIG_LIBMP3LAME|CONFIG_LIBTWOLAME|CONFIG_LIBSPEEX|CONFIG_LIBSOXR)=' \
+            '^(CONFIG_LIB(X264|X265|VPX|AOM|DAV1D|SVTAV1|FREETYPE|FONTCONFIG|FRIBIDI|HARFBUZZ|ASS|OPENJPEG|LC3|THEORA|WEBP|OPUS|VORBIS|MP3LAME|TWOLAME|SPEEX|SOXR))=' \
             "$CONFIG_MK" || true
 
           echo "=== Dynamic dependencies ==="
