@@ -1182,7 +1182,7 @@ jobs:
             x264 x265 vpx aom dav1d SvtAv1Enc \
             freetype2 fribidi harfbuzz fontconfig libass \
             opus vorbis vorbisenc lame twolame speex soxr \
-            libopenjp2 liblc3 theoradec theoraenc; do
+            libopenjp2 lc3 theoradec theoraenc; do
             if pkg-config --exists "$package"; then
               printf 'FOUND: %s (%s)\n' \
                 "$package" "$(pkg-config --modversion "$package")"
@@ -1191,7 +1191,7 @@ jobs:
             fi
           done
 
-          # These packages are required for the new integrations.
+          echo "=== Verify required subtitle dependencies ==="
           for package in freetype2 fribidi harfbuzz fontconfig libass; do
             pkg-config --exists "$package" || {
               echo "Required subtitle dependency missing: $package"
@@ -1199,12 +1199,25 @@ jobs:
             }
           done
 
+          echo "=== Verify OpenJPEG ==="
           test -s "$DEPS/lib/libopenjp2.a"
-          find "$DEPS/lib" -maxdepth 2 -type f -name '*lc3*.a' \
-            -print -quit | grep -q .
-          test -s "$DEPS/lib/libtheora.a"
+          pkg-config --exists libopenjp2
+
+          echo "=== Verify LC3 ==="
+          test -s "$DEPS/lib/liblc3.a"
+          test -s "$DEPS/lib/pkgconfig/lc3.pc"
+          pkg-config --exists lc3
+
+          echo "=== Verify Theora ==="
+          test -s "$DEPS/lib/libtheoradec.a"
+          test -s "$DEPS/lib/libtheoraenc.a"
+          pkg-config --exists theoradec
+          pkg-config --exists theoraenc
+
+          echo "=== Verify libass ==="
           test -s "$DEPS/lib/libass.a"
 
+          rm -rf "$SRC"
           git clone --depth 1 --branch "$VERSION" \
             https://git.ffmpeg.org/ffmpeg.git "$SRC"
 
@@ -1251,6 +1264,20 @@ jobs:
             --enable-libtwolame \
             --enable-libspeex \
             --enable-libsoxr
+
+          echo "=== Verify selected FFmpeg features ==="
+          for feature in \
+            LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
+            LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
+            LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA \
+            LIBOPUS LIBVORBIS LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
+            if grep -q "^#define CONFIG_${feature} 1$" config.h; then
+              echo "ENABLED: $feature"
+            else
+              echo "ERROR: $feature is not enabled"
+              exit 1
+            fi
+          done
 
           echo "FFmpeg configure completed successfully"
           
