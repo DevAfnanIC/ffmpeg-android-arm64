@@ -863,33 +863,78 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rc=$?; echo "::error::Fontconfig build failed at line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
+
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
+
+          FC_REPO="https://gitlab.freedesktop.org/fontconfig/fontconfig.git"
 
           get_latest_tag() {
             local repo_url="$1"
-            local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
-              tail -n 1
+            local grep_pattern="${2:-^[0-9]+(\.[0-9]+)+$}"
+            local tags
+            local selected_tag
+
+            echo "Looking up Fontconfig release tags: $repo_url" >&2
+
+            tags="$(git ls-remote --tags --refs "$repo_url")"
+
+            selected_tag="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(".*/", "", $2); print $2}' |
+                grep -E "$grep_pattern" |
+                sort -Vu |
+                tail -n 1
+            )"
+
+            if [ -z "$selected_tag" ]; then
+              echo "::error::No matching Fontconfig release tag found." >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected_tag"
           }
 
-          FC_TAG=$(get_latest_tag "https://gitlab.freedesktop.org/fontconfig/fontconfig.git")
-          echo "Latest Fontconfig version: $FC_TAG"
+          # Accept stable numeric tags such as 2.16.0 or 2.18.3.
+          FC_TAG="$(get_latest_tag "$FC_REPO" '^[0-9]+(\.[0-9]+)+$')"
+          echo "Selected Fontconfig release: $FC_TAG"
 
           SRC="$RUNNER_TEMP/fontconfig"
           BUILD="$RUNNER_TEMP/fontconfig-build"
 
-          git clone --depth 1 --branch "$FC_TAG" https://gitlab.freedesktop.org/fontconfig/fontconfig.git "$SRC"
-          meson setup "$BUILD" "$SRC" --cross-file "$RUNNER_TEMP/dav1d-cross.ini" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Ddoc=disabled -Dtests=disabled -Dtools=disabled -Dcache-build=disabled -Diconv=disabled -Dnls=disabled
+          rm -rf "$SRC" "$BUILD"
+
+          git clone --depth 1 --branch "$FC_TAG" "$FC_REPO" "$SRC"
+
+          if [ ! -f "$SRC/meson.build" ]; then
+            echo "::error::Selected Fontconfig tag $FC_TAG has no meson.build"
+            echo "Top-level source files:"
+            ls -la "$SRC"
+            exit 1
+          fi
+
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
+            --prefix "$DEPS" \
+            --libdir lib \
+            --buildtype release \
+            --default-library static \
+            -Ddoc=disabled \
+            -Dtests=disabled \
+            -Dtools=disabled \
+            -Dcache-build=disabled \
+            -Diconv=disabled \
+            -Dnls=disabled
+
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           ninja -C "$BUILD" install
 
+          test -s "$DEPS/lib/libfontconfig.a"
+          echo "Fontconfig $FC_TAG built and installed successfully."
+          
       - name: Build OpenJPEG
         shell: bash
         run: |
