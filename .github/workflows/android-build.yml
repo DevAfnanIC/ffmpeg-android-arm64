@@ -341,13 +341,14 @@ jobs:
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
+
           mkdir -p "$DEPS/lib/pkgconfig"
 
           get_latest_tag() {
             local repo_url="$1"
             local grep_pattern="${2:-^[vV]?[0-9]}"
 
-            git ls-remote --tags --refs "$repo_url" |
+            git ls-remote --tags --refs --sort='v:refname' "$repo_url" |
               awk '{sub(".*/", "", $2); print $2}' |
               grep -E "$grep_pattern" |
               grep -viE 'rc|beta|alpha|dev|patch|pre' |
@@ -373,8 +374,17 @@ jobs:
 
             rm -rf "$src"
             git clone --depth 1 --branch "$tag" "$repo_url" "$src"
-
             cd "$src"
+
+            # Refresh outdated GNU Autotools host detection scripts.
+            for file in config.sub config.guess; do
+              if [ -f "$file" ]; then
+                curl -fsSL \
+                  "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config/$file" \
+                  -o "$file"
+                chmod +x "$file"
+              fi
+            done
 
             if [ -x ./autogen.sh ]; then
               ./autogen.sh
@@ -383,6 +393,16 @@ jobs:
             if [ ! -x ./configure ]; then
               autoreconf -fi
             fi
+
+            # Refresh again in case autogen.sh regenerated the helper scripts.
+            for file in config.sub config.guess; do
+              if [ -f "$file" ]; then
+                curl -fsSL \
+                  "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config/$file" \
+                  -o "$file"
+                chmod +x "$file"
+              fi
+            done
 
             ./configure \
               --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
@@ -414,14 +434,14 @@ jobs:
             https://github.com/xiph/vorbis.git \
             "--disable-examples --disable-oggtest --disable-docs"
 
-          # LAME: release tags use the RELEASE__3_100 naming convention.
+          # LAME (GitHub mirror; release tags use RELEASE__X_XXX format)
           build_git_autotools \
             lame \
             https://github.com/rbrito/lame.git \
             "--disable-frontend" \
-            "^RELEASE__[0-9_]+$"
+            '^RELEASE__[0-9_]+$'
 
-          # Create lame.pc if the project did not install it.
+          # Supply pkg-config metadata if this LAME mirror does not install it.
           if ! pkg-config --exists lame; then
             cat > "$DEPS/lib/pkgconfig/lame.pc" <<EOF
           prefix=$DEPS
@@ -429,7 +449,7 @@ jobs:
           libdir=\${prefix}/lib
           includedir=\${prefix}/include
 
-          Name: LAME
+          Name: lame
           Description: LAME MP3 encoder
           Version: 3.100
           Libs: -L\${libdir} -lmp3lame
@@ -450,7 +470,7 @@ jobs:
             https://github.com/xiph/speex.git \
             "--disable-binaries --disable-examples"
 
-          # SoXR
+          # SoXR (CMake)
           SOXR_TAG="$(get_latest_tag "https://github.com/chirlu/soxr.git")"
           if [ -z "$SOXR_TAG" ]; then
             echo "::error::Could not find a SoXR release tag"
@@ -460,7 +480,6 @@ jobs:
           echo "Building SoXR from release tag: $SOXR_TAG"
 
           rm -rf "$RUNNER_TEMP/soxr" "$RUNNER_TEMP/soxr-build"
-
           git clone --depth 1 --branch "$SOXR_TAG" \
             https://github.com/chirlu/soxr.git \
             "$RUNNER_TEMP/soxr"
@@ -480,11 +499,12 @@ jobs:
           cmake --build "$RUNNER_TEMP/soxr-build" --parallel "$BUILD_JOBS"
           cmake --install "$RUNNER_TEMP/soxr-build"
 
-          # Verify that the expected static libraries were installed.
+          # Verify the expected static libraries were installed.
           for lib in \
             libopus.a \
             libogg.a \
             libvorbis.a \
+            libvorbisfile.a \
             libvorbisenc.a \
             libmp3lame.a \
             libtwolame.a \
