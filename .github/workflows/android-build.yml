@@ -360,11 +360,16 @@ jobs:
             local file
 
             for file in config.sub config.guess; do
-              if [ -f "$file" ]; then
+              if [ -e "$file" ] || [ -L "$file" ]; then
                 echo "Refreshing $file"
+
+                # Remove an existing file or symlink before downloading.
+                rm -f "$file"
+
                 curl -fsSL \
                   "https://raw.githubusercontent.com/gcc-mirror/gcc/master/$file" \
                   -o "$file"
+
                 chmod +x "$file"
               fi
             done
@@ -379,6 +384,7 @@ jobs:
             local tag
 
             tag="$(get_latest_tag "$repo_url" "$tag_pattern")"
+
             if [ -z "$tag" ]; then
               echo "::error::Could not find a matching release tag for $name"
               return 1
@@ -400,7 +406,7 @@ jobs:
               autoreconf -fi
             fi
 
-            # Regeneration may replace the helper scripts, so refresh again.
+            # Autotools may recreate or replace these helper scripts.
             refresh_config_scripts
 
             ./configure \
@@ -471,6 +477,7 @@ jobs:
 
           # SoXR (CMake)
           SOXR_TAG="$(get_latest_tag "https://github.com/chirlu/soxr.git")"
+
           if [ -z "$SOXR_TAG" ]; then
             echo "::error::Could not find a SoXR release tag"
             exit 1
@@ -479,6 +486,7 @@ jobs:
           echo "Building SoXR from release tag: $SOXR_TAG"
 
           rm -rf "$RUNNER_TEMP/soxr" "$RUNNER_TEMP/soxr-build"
+
           git clone --depth 1 --branch "$SOXR_TAG" \
             https://github.com/chirlu/soxr.git \
             "$RUNNER_TEMP/soxr"
@@ -508,6 +516,7 @@ jobs:
             libmp3lame.a \
             libtwolame.a \
             libspeex.a; do
+
             if [ ! -s "$DEPS/lib/$lib" ]; then
               echo "::error::Missing static library: $DEPS/lib/$lib"
               ls -la "$DEPS/lib"
