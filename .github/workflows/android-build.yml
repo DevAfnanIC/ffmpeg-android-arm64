@@ -143,16 +143,25 @@ jobs:
           content = path.read_text()
           pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}(?P<rest>[^\n]*)$')
           matches = list(pattern.finditer(content))
-          if len(matches) != 5:
-              raise SystemExit(f"Expected 5 ARM_ARGS lines, found {len(matches)}")
+          if not matches:
+              raise SystemExit("No ARM_ARGS lines found in x265 CMakeLists.txt")
           def replace(match):
               return match.group("indent") + f"ARGS --target=aarch64-linux-android{api} " + "${ARM_ARGS}" + match.group("rest")
           path.write_text(pattern.sub(replace, content))
+          print(f"Patched {len(matches)} ARM_ARGS lines.")
           PY
+
+          TARGET_COUNT="$(
+            grep -F -c -- "--target=${TARGET}" "$X265_SOURCE/CMakeLists.txt"
+          )"
+          test "$TARGET_COUNT" -gt 0
 
           build_x265_variant() {
             local variant="$1"
             shift
+
+            echo "=== Configuring x265: $variant ==="
+
             cmake -S "$X265_SOURCE" -B "$X265_BUILD/$variant" -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
               -DANDROID_ABI=arm64-v8a \
@@ -168,17 +177,52 @@ jobs:
               -DENABLE_SHARED=OFF \
               -DENABLE_CLI=OFF \
               "$@"
-            cmake --build "$X265_BUILD/$variant" --parallel "$BUILD_JOBS"
+
+            cmake --build "$X265_BUILD/$variant" \
+              --parallel "$BUILD_JOBS"
           }
 
-          build_x265_variant 10bit -DHIGH_BIT_DEPTH=ON -DMAIN12=OFF -DEXPORT_C_API=OFF
-          build_x265_variant 12bit -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DEXPORT_C_API=OFF
-          build_x265_variant 8bit -DHIGH_BIT_DEPTH=OFF -DMAIN12=OFF -DEXPORT_C_API=ON -DLINKED_10BIT=ON -DLINKED_12BIT=ON -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
+          build_x265_variant 10bit \
+            -DHIGH_BIT_DEPTH=ON \
+            -DMAIN12=OFF \
+            -DEXPORT_C_API=OFF
 
-          install -Dm644 "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
-          install -Dm644 "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
-          X265_CONFIG_HEADER="$(find "$X265_BUILD/8bit" -type f -name x265_config.h -print -quit)"
-          install -Dm644 "$X265_CONFIG_HEADER" "$DEPS/include/x265_config.h"
+          build_x265_variant 12bit \
+            -DHIGH_BIT_DEPTH=ON \
+            -DMAIN12=ON \
+            -DEXPORT_C_API=OFF
+
+          build_x265_variant 8bit \
+            -DHIGH_BIT_DEPTH=OFF \
+            -DMAIN12=OFF \
+            -DEXPORT_C_API=ON \
+            -DLINKED_10BIT=ON \
+            -DLINKED_12BIT=ON \
+            -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
+            -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
+
+          install -Dm644 \
+            "$X265_BUILD/8bit/libx265.a" \
+            "$DEPS/lib/libx265.a"
+
+          install -Dm644 \
+            "$X265_SOURCE/x265.h" \
+            "$DEPS/include/x265.h"
+
+          X265_CONFIG_HEADER="$(
+            find "$X265_BUILD/8bit" -type f \
+              -name x265_config.h -print -quit
+          )"
+
+          if [ -z "$X265_CONFIG_HEADER" ]; then
+            echo "ERROR: x265_config.h was not generated in the 8-bit build."
+            find "$X265_BUILD" -type f -name x265_config.h -print
+            exit 1
+          fi
+
+          install -Dm644 \
+            "$X265_CONFIG_HEADER" \
+            "$DEPS/include/x265_config.h"
 
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
@@ -194,6 +238,13 @@ jobs:
           Cflags: -I\${includedir}
           EOF
 
+          test -s "$DEPS/lib/libx265.a"
+          test -s "$DEPS/include/x265.h"
+          test -s "$DEPS/include/x265_config.h"
+          test -s "$DEPS/lib/pkgconfig/x265.pc"
+
+          echo "x265 8-bit, 10-bit and 12-bit build completed successfully."
+          
       - name: Build libvpx for Android ARM64
         shell: bash
         run: |
