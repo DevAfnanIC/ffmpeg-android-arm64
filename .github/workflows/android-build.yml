@@ -664,34 +664,76 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rc=$?; echo "::error::FreeType build failed at line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
+
           get_latest_tag() {
             local repo_url="$1"
             local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
-              tail -n 1
+            local tags
+            local selected_tag
+
+            echo "Looking up FreeType release tags: $repo_url" >&2
+
+            tags="$(git ls-remote --tags --refs "$repo_url")"
+
+            selected_tag="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(".*/", "", $2); print $2}' |
+                grep -E "$grep_pattern" |
+                grep -viE 'rc|beta|alpha|dev|patch|pre' |
+                sort -Vu |
+                tail -n 1
+            )"
+
+            if [ -z "$selected_tag" ]; then
+              echo "::error::No stable FreeType release tag found." >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected_tag"
           }
 
-          FT_TAG=$(get_latest_tag "https://github.com/freetype/freetype.git" "^VER-[0-9-]")
-          echo "Latest FreeType version: $FT_TAG"
+          FT_REPO="https://github.com/freetype/freetype.git"
+
+          # Match stable tags such as VER-2-14-3, but not VER-2-BETA4.
+          FT_TAG="$(get_latest_tag "$FT_REPO" '^VER-[0-9]+(-[0-9]+)+$')"
+          echo "Selected FreeType release: $FT_TAG"
 
           SRC="$RUNNER_TEMP/freetype"
           BUILD="$RUNNER_TEMP/freetype-build"
 
-          git clone --depth 1 --branch "$FT_TAG" https://github.com/freetype/freetype.git "$SRC"
+          rm -rf "$SRC" "$BUILD"
+
+          git clone --depth 1 --branch "$FT_TAG" "$FT_REPO" "$SRC"
+
+          if [ ! -f "$SRC/CMakeLists.txt" ]; then
+            echo "::error::Selected FreeType tag $FT_TAG has no top-level CMakeLists.txt"
+            exit 1
+          fi
+
           cmake -S "$SRC" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
-            -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_BZIP2=TRUE -DFT_DISABLE_PNG=TRUE -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DFT_DISABLE_ZLIB=TRUE \
+            -DFT_DISABLE_BZIP2=TRUE \
+            -DFT_DISABLE_PNG=TRUE \
+            -DFT_DISABLE_HARFBUZZ=TRUE \
+            -DFT_DISABLE_BROTLI=TRUE
+
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
 
+          test -s "$DEPS/lib/libfreetype.a"
+          test -d "$DEPS/include/freetype2"
+
+          echo "FreeType $FT_TAG built and installed successfully."
+          
       - name: Build FriBidi
         shell: bash
         run: |
