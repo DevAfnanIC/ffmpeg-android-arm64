@@ -69,6 +69,49 @@ jobs:
           set -euo pipefail
           mkdir -p "$PREFIX" "$DEPS/lib/pkgconfig" "$DEPS/include"
 
+      - name: Resolve latest published releases
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          github_latest() {
+            local repo="$1"
+            curl -fsSL \
+              "https://api.github.com/repos/${repo}/releases/latest" |
+              jq -er '.tag_name'
+          }
+
+          gitlab_latest() {
+            local project="$1"
+            local encoded
+            encoded="$(printf '%s' "$project" | jq -sRr @uri)"
+            curl -fsSL \
+              "https://gitlab.com/api/v4/projects/${encoded}/releases/permalink/latest" |
+              jq -er '.tag_name'
+          }
+
+          # GitHub: published, non-prerelease releases
+          declare -A VERSION
+
+          VERSION[soxr]="$(github_latest chirlu/soxr)"
+          VERSION[freetype]="$(github_latest freetype/freetype)"
+          VERSION[fribidi]="$(github_latest fribidi/fribidi)"
+          VERSION[harfbuzz]="$(github_latest harfbuzz/harfbuzz)"
+          VERSION[libwebp]="$(github_latest webmproject/libwebp)"
+          VERSION[expat]="$(github_latest libexpat/libexpat)"
+          VERSION[openjpeg]="$(github_latest uclouvain/openjpeg)"
+          VERSION[lc3]="$(github_latest google/liblc3)"
+          VERSION[libass]="$(github_latest libass/libass)"
+
+          # GitLab: latest published project release
+          VERSION[svtav1]="$(gitlab_latest AOMediaCodec/SVT-AV1)"
+          VERSION[fontconfig]="$(gitlab_latest freedesktop/fontconfig)"
+
+          for name in "${!VERSION[@]}"; do
+            printf '%-12s %s\n' "$name" "${VERSION[$name]}"
+            echo "${name^^}_VERSION=${VERSION[$name]}" >> "$GITHUB_ENV"
+          done
+          
       - name: Build x264
         shell: bash
         run: |
