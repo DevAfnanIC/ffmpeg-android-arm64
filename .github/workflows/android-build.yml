@@ -382,8 +382,8 @@ jobs:
           build_git_autotools opus https://github.com/xiph/opus.git "--disable-doc --disable-extra-programs"
           # Ogg
           build_git_autotools libogg https://github.com/xiph/ogg.git "--disable-examples --disable-oggtest"
-          # Vorbis
-          build_git_autotools libvorbis https://github.com/xiph/vorbis.git "--disable-examples --disable-oggtest"
+          # Vorbis (Disabled doc/docs generation to prevent install failures)
+          build_git_autotools libvorbis https://github.com/xiph/vorbis.git "--disable-examples --disable-oggtest --disable-docs"
           # LAME (using GitHub mirror)
           build_git_autotools lame https://github.com/rbrito/lame.git "--disable-frontend"
           if ! pkg-config --exists lame; then
@@ -416,7 +416,7 @@ jobs:
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DWITH_OPENMP=OFF -DBUILD_TESTS=OFF
           cmake --build "$RUNNER_TEMP/soxr-build" --parallel "$BUILD_JOBS"
           cmake --install "$RUNNER_TEMP/soxr-build"
-
+          
       - name: Build dav1d
         shell: bash
         run: |
