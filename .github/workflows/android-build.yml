@@ -520,8 +520,8 @@ jobs:
             speex \
             https://github.com/xiph/speex.git \
             "--disable-binaries --disable-examples" \
-                '^[vV]?[0-9]'
-
+            '^[sS]peex-[0-9]'
+            
           # SoXR (CMake)
           SOXR_TAG="$(get_latest_tag "https://github.com/chirlu/soxr.git")"
 
