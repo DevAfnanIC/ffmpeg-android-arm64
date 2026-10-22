@@ -356,6 +356,20 @@ jobs:
               tail -n 1
           }
 
+          refresh_config_scripts() {
+            local file
+
+            for file in config.sub config.guess; do
+              if [ -f "$file" ]; then
+                echo "Refreshing $file"
+                curl -fsSL \
+                  "https://raw.githubusercontent.com/gcc-mirror/gcc/master/$file" \
+                  -o "$file"
+                chmod +x "$file"
+              fi
+            done
+          }
+
           build_git_autotools() {
             local name="$1"
             local repo_url="$2"
@@ -376,15 +390,7 @@ jobs:
             git clone --depth 1 --branch "$tag" "$repo_url" "$src"
             cd "$src"
 
-            # Refresh outdated GNU Autotools host detection scripts.
-            for file in config.sub config.guess; do
-              if [ -f "$file" ]; then
-                curl -fsSL \
-                  "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config/$file" \
-                  -o "$file"
-                chmod +x "$file"
-              fi
-            done
+            refresh_config_scripts
 
             if [ -x ./autogen.sh ]; then
               ./autogen.sh
@@ -394,15 +400,8 @@ jobs:
               autoreconf -fi
             fi
 
-            # Refresh again in case autogen.sh regenerated the helper scripts.
-            for file in config.sub config.guess; do
-              if [ -f "$file" ]; then
-                curl -fsSL \
-                  "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config/$file" \
-                  -o "$file"
-                chmod +x "$file"
-              fi
-            done
+            # Regeneration may replace the helper scripts, so refresh again.
+            refresh_config_scripts
 
             ./configure \
               --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
@@ -434,14 +433,14 @@ jobs:
             https://github.com/xiph/vorbis.git \
             "--disable-examples --disable-oggtest --disable-docs"
 
-          # LAME (GitHub mirror; release tags use RELEASE__X_XXX format)
+          # LAME
           build_git_autotools \
             lame \
             https://github.com/rbrito/lame.git \
             "--disable-frontend" \
             '^RELEASE__[0-9_]+$'
 
-          # Supply pkg-config metadata if this LAME mirror does not install it.
+          # Add pkg-config metadata if LAME did not install it.
           if ! pkg-config --exists lame; then
             cat > "$DEPS/lib/pkgconfig/lame.pc" <<EOF
           prefix=$DEPS
@@ -499,7 +498,7 @@ jobs:
           cmake --build "$RUNNER_TEMP/soxr-build" --parallel "$BUILD_JOBS"
           cmake --install "$RUNNER_TEMP/soxr-build"
 
-          # Verify the expected static libraries were installed.
+          # Verify static libraries.
           for lib in \
             libopus.a \
             libogg.a \
