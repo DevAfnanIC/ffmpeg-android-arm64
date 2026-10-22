@@ -424,14 +424,17 @@ jobs:
 
             refresh_config_scripts
 
-            if [ -x ./autogen.sh ]; then
-              if [ "$name" = "twolame" ]; then
-                # TwoLAME's autogen.sh runs a preliminary configure.
-                # Use the runner's native compiler for that step only.
-                CC="$(command -v cc)" ./autogen.sh
-              else
-                ./autogen.sh
-              fi
+            if [ "$name" = "twolame" ]; then
+              # Do not run TwoLAME's autogen.sh: it invokes a preliminary
+              # configure with maintainer mode enabled, which requires
+              # asciidoc even though documentation is not needed.
+              #
+              # Regenerate the Autotools files directly, without that
+              # preliminary configure step.
+              libtoolize --force --copy --automake
+              autoreconf -fi
+            elif [ -x ./autogen.sh ]; then
+              ./autogen.sh
             fi
 
             if [ ! -x ./configure ]; then
