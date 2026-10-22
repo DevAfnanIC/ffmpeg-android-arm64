@@ -332,6 +332,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rc=$?; echo "ERROR: line $LINENO, exit code $rc, command: $BASH_COMMAND" >&2' ERR
           export PATH="$TOOLCHAIN/bin:$PATH"
           export CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
           export CFLAGS="-O2 -fPIC" CXXFLAGS="-O2 -fPIC"
