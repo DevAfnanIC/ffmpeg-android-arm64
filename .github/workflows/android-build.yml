@@ -495,9 +495,9 @@ jobs:
           # TwoLAME
           build_git_autotools \
             twolame \
-            https://github.com/twolame/twolame.git \
+            https://github.com/njh/twolame.git \
             "--disable-frontend"
-
+            
           # Speex
           build_git_autotools \
             speex \
