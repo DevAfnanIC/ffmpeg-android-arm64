@@ -344,16 +344,38 @@ jobs:
 
           mkdir -p "$DEPS/lib/pkgconfig"
 
+          # Retrieve release tags with explicit diagnostics.
           get_latest_tag() {
             local repo_url="$1"
             local grep_pattern="${2:-^[vV]?[0-9]}"
+            local tags
+            local selected_tag
 
-            git ls-remote --tags --refs --sort='v:refname' "$repo_url" |
-              awk '{sub(".*/", "", $2); print $2}' |
-              grep -E "$grep_pattern" |
-              grep -viE 'rc|beta|alpha|dev|patch|pre' |
-              sort -Vu |
-              tail -n 1
+            echo "Looking up release tags: $repo_url" >&2
+
+            if ! tags="$(git ls-remote --tags --refs "$repo_url")"; then
+              echo "::error::Failed to query Git tags for repository: $repo_url" >&2
+              return 1
+            fi
+
+            selected_tag="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(".*/", "", $2); print $2}' |
+                grep -E "$grep_pattern" |
+                grep -viE 'rc|beta|alpha|dev|patch|pre' |
+                sort -Vu |
+                tail -n 1
+            )" || {
+              echo "::error::Failed to filter release tags for repository: $repo_url" >&2
+              return 1
+            }
+
+            if [ -z "$selected_tag" ]; then
+              echo "::error::No matching release tag found for $repo_url (pattern: $grep_pattern)" >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected_tag"
           }
 
           refresh_config_scripts() {
@@ -366,7 +388,7 @@ jobs:
                 # Remove an existing file or symlink before downloading.
                 rm -f "$file"
 
-                curl -fsSL \
+                curl -fsSL --retry 3 \
                   "https://raw.githubusercontent.com/gcc-mirror/gcc/master/$file" \
                   -o "$file"
 
@@ -382,6 +404,11 @@ jobs:
             local tag_pattern="${4:-^[vV]?[0-9]}"
             local src="$RUNNER_TEMP/$name"
             local tag
+
+            echo "========================================"
+            echo "Preparing to build: $name"
+            echo "Repository: $repo_url"
+            echo "========================================"
 
             tag="$(get_latest_tag "$repo_url" "$tag_pattern")"
 
@@ -419,6 +446,8 @@ jobs:
 
             make -j"$BUILD_JOBS"
             make install
+
+            echo "Successfully built $name"
           }
 
           # Opus
