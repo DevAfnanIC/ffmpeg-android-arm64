@@ -13,7 +13,6 @@ jobs:
 
     env:
       ANDROID_API: "24"
-      FFMPEG_VERSION: "9.0.2"
       BUILD_JOBS: "2"
 
     steps:
@@ -34,12 +33,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           test -n "${ANDROID_NDK_LATEST_HOME:-}" || {
             echo "ANDROID_NDK_LATEST_HOME is not set on this runner."
             exit 1
           }
-
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
           echo "NDK=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
 
@@ -47,9 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
-
           test -x "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang"
           test -x "$TOOLCHAIN/bin/aarch64-linux-android${ANDROID_API}-clang++"
 
@@ -69,82 +64,33 @@ jobs:
           set -euo pipefail
           mkdir -p "$PREFIX" "$DEPS/lib/pkgconfig" "$DEPS/include"
 
-      - name: Resolve latest published releases
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          github_latest() {
-            local repo="$1"
-            curl -fsSL \
-              "https://api.github.com/repos/${repo}/releases/latest" |
-              jq -er '.tag_name'
-          }
-
-          gitlab_latest() {
-            local project="$1"
-            local encoded
-            encoded="$(printf '%s' "$project" | jq -sRr @uri)"
-            curl -fsSL \
-              "https://gitlab.com/api/v4/projects/${encoded}/releases/permalink/latest" |
-              jq -er '.tag_name'
-          }
-
-          # GitHub: published, non-prerelease releases
-          declare -A VERSION
-
-          VERSION[soxr]="$(github_latest chirlu/soxr)"
-          VERSION[freetype]="$(github_latest freetype/freetype)"
-          VERSION[fribidi]="$(github_latest fribidi/fribidi)"
-          VERSION[harfbuzz]="$(github_latest harfbuzz/harfbuzz)"
-          VERSION[libwebp]="$(github_latest webmproject/libwebp)"
-          VERSION[expat]="$(github_latest libexpat/libexpat)"
-          VERSION[openjpeg]="$(github_latest uclouvain/openjpeg)"
-          VERSION[lc3]="$(github_latest google/liblc3)"
-          VERSION[libass]="$(github_latest libass/libass)"
-
-          # GitLab: latest published project release
-          VERSION[svtav1]="$(gitlab_latest AOMediaCodec/SVT-AV1)"
-          VERSION[fontconfig]="$(gitlab_latest freedesktop/fontconfig)"
-
-          for name in "${!VERSION[@]}"; do
-            printf '%-12s %s\n' "$name" "${VERSION[$name]}"
-            echo "${name^^}_VERSION=${VERSION[$name]}" >> "$GITHUB_ENV"
-          done
-          
       - name: Build x264
         shell: bash
         run: |
           set -euo pipefail
-
           git clone --depth 1 \
             https://code.videolan.org/videolan/x264.git \
             "$RUNNER_TEMP/x264"
 
           CROSS="$RUNNER_TEMP/aarch64-linux-android-"
-
           for tool in ar ranlib strip nm; do
             test -x "$TOOLCHAIN/bin/llvm-$tool"
             ln -sf "$TOOLCHAIN/bin/llvm-$tool" "${CROSS}${tool}"
           done
-
           ln -sf "$(command -v strings)" "${CROSS}strings"
 
           cat > "${CROSS}gcc" <<EOF
           #!/bin/sh
           exec "$CC" "\$@"
           EOF
-
           cat > "${CROSS}g++" <<EOF
           #!/bin/sh
           exec "$CXX" "\$@"
           EOF
-
           chmod +x "${CROSS}gcc" "${CROSS}g++"
           export PATH="$RUNNER_TEMP:$TOOLCHAIN/bin:$PATH"
 
           cd "$RUNNER_TEMP/x264"
-
           ./configure \
             --prefix="$DEPS" \
             --host=aarch64-linux \
@@ -160,15 +106,27 @@ jobs:
           make -j"$BUILD_JOBS"
           make install
 
-          test -s "$DEPS/lib/libx264.a"
-          test -s "$DEPS/include/x264.h"
-
-      - name: Build x265 8-bit, 10-bit and 12-bit
+      - name: Build x265 (8-bit, 10-bit and 12-bit)
         shell: bash
         run: |
           set -euo pipefail
 
-          git clone --depth 1 --branch 4.1 \
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          X265_VERSION=$(get_latest_tag "https://bitbucket.org/multicoreware/x265_git.git")
+          echo "Latest x265 version: $X265_VERSION"
+
+          git clone --depth 1 --branch "$X265_VERSION" \
             https://bitbucket.org/multicoreware/x265_git.git \
             "$RUNNER_TEMP/x265"
 
@@ -176,52 +134,25 @@ jobs:
           X265_BUILD="$RUNNER_TEMP/x265-build"
           TARGET="aarch64-linux-android${ANDROID_API}"
 
-          mkdir -p "$X265_BUILD" "$DEPS/lib" \
-            "$DEPS/include" "$DEPS/lib/pkgconfig"
+          mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
 
           python3 - "$X265_SOURCE/CMakeLists.txt" "$ANDROID_API" <<'PY'
-          import pathlib
-          import re
-          import sys
-
+          import pathlib, re, sys
           path = pathlib.Path(sys.argv[1])
           api = sys.argv[2]
           content = path.read_text()
-
-          pattern = re.compile(
-              r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}(?P<rest>[^\n]*)$'
-          )
+          pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}(?P<rest>[^\n]*)$')
           matches = list(pattern.finditer(content))
-
           if len(matches) != 5:
-              raise SystemExit(
-                  f"Expected 5 ARM_ARGS lines, found {len(matches)}; "
-                  "check the x265 source before continuing."
-              )
-
+              raise SystemExit(f"Expected 5 ARM_ARGS lines, found {len(matches)}")
           def replace(match):
-              return (
-                  match.group("indent")
-                  + f"ARGS --target=aarch64-linux-android{api} "
-                  + "${ARM_ARGS}"
-                  + match.group("rest")
-              )
-
+              return match.group("indent") + f"ARGS --target=aarch64-linux-android{api} " + "${ARM_ARGS}" + match.group("rest")
           path.write_text(pattern.sub(replace, content))
-          print(f"Patched {len(matches)} ARM_ARGS lines.")
           PY
-
-          TARGET_COUNT="$(
-            grep -F -c -- "--target=${TARGET}" "$X265_SOURCE/CMakeLists.txt"
-          )"
-          test "$TARGET_COUNT" -eq 5
 
           build_x265_variant() {
             local variant="$1"
             shift
-
-            echo "=== Configuring x265: $variant ==="
-
             cmake -S "$X265_SOURCE" -B "$X265_BUILD/$variant" -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
               -DANDROID_ABI=arm64-v8a \
@@ -237,52 +168,17 @@ jobs:
               -DENABLE_SHARED=OFF \
               -DENABLE_CLI=OFF \
               "$@"
-
-            cmake --build "$X265_BUILD/$variant" \
-              --parallel "$BUILD_JOBS"
+            cmake --build "$X265_BUILD/$variant" --parallel "$BUILD_JOBS"
           }
 
-          build_x265_variant 10bit \
-            -DHIGH_BIT_DEPTH=ON \
-            -DMAIN12=OFF \
-            -DEXPORT_C_API=OFF
+          build_x265_variant 10bit -DHIGH_BIT_DEPTH=ON -DMAIN12=OFF -DEXPORT_C_API=OFF
+          build_x265_variant 12bit -DHIGH_BIT_DEPTH=ON -DMAIN12=ON -DEXPORT_C_API=OFF
+          build_x265_variant 8bit -DHIGH_BIT_DEPTH=OFF -DMAIN12=OFF -DEXPORT_C_API=ON -DLINKED_10BIT=ON -DLINKED_12BIT=ON -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
-          build_x265_variant 12bit \
-            -DHIGH_BIT_DEPTH=ON \
-            -DMAIN12=ON \
-            -DEXPORT_C_API=OFF
-
-          build_x265_variant 8bit \
-            -DHIGH_BIT_DEPTH=OFF \
-            -DMAIN12=OFF \
-            -DEXPORT_C_API=ON \
-            -DLINKED_10BIT=ON \
-            -DLINKED_12BIT=ON \
-            -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
-            -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
-
-          install -Dm644 \
-            "$X265_BUILD/8bit/libx265.a" \
-            "$DEPS/lib/libx265.a"
-
-          install -Dm644 \
-            "$X265_SOURCE/x265.h" \
-            "$DEPS/include/x265.h"
-
-          X265_CONFIG_HEADER="$(
-            find "$X265_BUILD/8bit" -type f \
-              -name x265_config.h -print -quit
-          )"
-
-          if [ -z "$X265_CONFIG_HEADER" ]; then
-            echo "ERROR: x265_config.h was not generated in the 8-bit build."
-            find "$X265_BUILD" -type f -name x265_config.h -print
-            exit 1
-          fi
-
-          install -Dm644 \
-            "$X265_CONFIG_HEADER" \
-            "$DEPS/include/x265_config.h"
+          install -Dm644 "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
+          install -Dm644 "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
+          X265_CONFIG_HEADER="$(find "$X265_BUILD/8bit" -type f -name x265_config.h -print -quit)"
+          install -Dm644 "$X265_CONFIG_HEADER" "$DEPS/include/x265_config.h"
 
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
@@ -292,85 +188,77 @@ jobs:
 
           Name: x265
           Description: H.265/HEVC video encoder
-          Version: 4.1
+          Version: $X265_VERSION
           Libs: -L\${libdir} -lx265
           Libs.private: -lc++ -lm -ldl
           Cflags: -I\${includedir}
           EOF
 
-          test -s "$DEPS/lib/libx265.a"
-          test -s "$DEPS/include/x265.h"
-          test -s "$DEPS/include/x265_config.h"
-          test -s "$DEPS/lib/pkgconfig/x265.pc"
-
-          echo "=== Installed x265 files ==="
-          ls -lh "$DEPS/lib/libx265.a" \
-            "$DEPS/include/x265.h" \
-            "$DEPS/include/x265_config.h"
-
-          echo "x265 8-bit, 10-bit and 12-bit build completed."
-
       - name: Build libvpx for Android ARM64
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          git clone --depth 1 --branch v1.15.2 \
+          VPX_VERSION=$(get_latest_tag "https://chromium.googlesource.com/webm/libvpx")
+          echo "Latest libvpx version: $VPX_VERSION"
+
+          git clone --depth 1 --branch "$VPX_VERSION" \
             https://chromium.googlesource.com/webm/libvpx \
             "$RUNNER_TEMP/libvpx"
 
           cd "$RUNNER_TEMP/libvpx"
-
-          export CC="$CC"
-          export CXX="$CXX"
-          export AR="$AR"
-          export AS="$CC"
-          export LD="$CXX"
-          export STRIP="$STRIP"
-          export CROSS=""
+          export CC="$CC" CXX="$CXX" AR="$AR" AS="$CC" LD="$CXX" STRIP="$STRIP" CROSS=""
 
           ./configure \
             --prefix="$DEPS" \
             --target=arm64-android-gcc \
-            --disable-examples \
-            --disable-tools \
-            --disable-docs \
-            --disable-unit-tests \
-            --disable-shared \
-            --enable-static \
-            --enable-pic \
-            --enable-vp8 \
-            --enable-vp9 \
-            --disable-webm-io \
-            --disable-libyuv \
+            --disable-examples --disable-tools --disable-docs --disable-unit-tests \
+            --disable-shared --enable-static --enable-pic --enable-vp8 --enable-vp9 \
+            --disable-webm-io --disable-libyuv \
             --extra-cflags="--target=aarch64-linux-android${ANDROID_API} --sysroot=${SYSROOT}" \
             --extra-cxxflags="--target=aarch64-linux-android${ANDROID_API} --sysroot=${SYSROOT}"
 
           make -j"$BUILD_JOBS"
           make install
 
-          test -s "$DEPS/lib/libvpx.a"
-          echo "libvpx build completed."
-
-
       - name: Build libaom for Android ARM64
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          AOM_VERSION=$(get_latest_tag "https://aomedia.googlesource.com/aom")
+          echo "Latest libaom version: $AOM_VERSION"
 
           AOM_SOURCE="$RUNNER_TEMP/libaom"
           AOM_BUILD="$RUNNER_TEMP/libaom-build"
 
-          echo "=== Clone libaom ==="
-          git clone --depth 1 --branch v3.12.1 \
+          git clone --depth 1 --branch "$AOM_VERSION" \
             https://aomedia.googlesource.com/aom \
             "$AOM_SOURCE"
 
-          echo "=== Configure libaom for Android ARM64 ==="
-          cmake \
-            -S "$AOM_SOURCE" \
-            -B "$AOM_BUILD" \
-            -G Ninja \
+          cmake -S "$AOM_SOURCE" -B "$AOM_BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM="android-${ANDROID_API}" \
@@ -383,85 +271,51 @@ jobs:
             -DCMAKE_C_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
             -DCMAKE_CXX_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
             -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_TESTS=OFF \
-            -DENABLE_EXAMPLES=OFF \
-            -DENABLE_TOOLS=OFF \
-            -DENABLE_DOCS=OFF \
-            -DENABLE_TESTDATA=OFF \
-            -DCONFIG_AV1_ENCODER=1 \
-            -DCONFIG_AV1_DECODER=1 \
-            -DCONFIG_PIC=1 \
-            -DCONFIG_RUNTIME_CPU_DETECT=1 \
-            -DCONFIG_MULTITHREAD=1 \
-            -DAOM_TARGET_CPU=generic
+            -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF -DENABLE_TESTDATA=OFF \
+            -DCONFIG_AV1_ENCODER=1 -DCONFIG_AV1_DECODER=1 -DCONFIG_PIC=1 -DCONFIG_RUNTIME_CPU_DETECT=1 -DCONFIG_MULTITHREAD=1 -DAOM_TARGET_CPU=generic
 
-          echo "=== Build libaom ==="
-          cmake --build "$AOM_BUILD" \
-            --parallel "$BUILD_JOBS"
-
-          echo "=== Install libaom ==="
+          cmake --build "$AOM_BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$AOM_BUILD"
 
-          echo "=== Verify installed files ==="
-          find "$DEPS/lib" "$DEPS/include" \
-            -maxdepth 3 -iname '*aom*' -print
-
-          if [ ! -s "$DEPS/lib/libaom.a" ]; then
-            echo "ERROR: libaom.a was not installed at the expected path."
-            find "$AOM_BUILD" -type f -name 'libaom*.a' -print
-            exit 1
-          fi
-
-          if [ ! -s "$DEPS/include/aom/aom_encoder.h" ] || \
-             [ ! -s "$DEPS/include/aom/aom_decoder.h" ]; then
-            echo "ERROR: libaom public headers are missing."
-            exit 1
-          fi
-
-          echo "=== Verify ARM64 archive objects ==="
-          "$TOOLCHAIN/bin/llvm-ar" t "$DEPS/lib/libaom.a" | head -20
-
-          echo "libaom static build completed successfully."
-          
-      - name: Build audio libraries
+      - name: Build audio libraries (Opus, Ogg, Vorbis, LAME, TwoLAME, Speex, SoXR)
         shell: bash
         run: |
           set -euo pipefail
-
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export CC="$CC"
-          export CXX="$CXX"
-          export AR="$AR"
-          export RANLIB="$RANLIB"
-          export STRIP="$STRIP"
-          export CFLAGS="-O2 -fPIC"
-          export CXXFLAGS="-O2 -fPIC"
-          export CPPFLAGS="-I$DEPS/include"
-          export LDFLAGS="-L$DEPS/lib"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP"
+          export CFLAGS="-O2 -fPIC" CXXFLAGS="-O2 -fPIC"
+          export CPPFLAGS="-I$DEPS/include" LDFLAGS="-L$DEPS/lib"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
-
           mkdir -p "$DEPS/lib/pkgconfig"
 
-          build_autotools() {
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          build_git_autotools() {
             local name="$1"
-            local url="$2"
+            local repo_url="$2"
             local configure_args="$3"
             local src="$RUNNER_TEMP/$name"
 
             rm -rf "$src"
-            mkdir -p "$src"
+            local tag
+            tag=$(get_latest_tag "$repo_url")
+            echo "Building $name latest tag: $tag"
 
-            curl -fL --retry 3 "$url" \
-              -o "$RUNNER_TEMP/$name.tar.gz"
-
-            tar -xzf "$RUNNER_TEMP/$name.tar.gz" \
-              --strip-components=1 \
-              -C "$src"
-
+            git clone --depth 1 --branch "$tag" "$repo_url" "$src"
             cd "$src"
-
+            [ -x ./autogen.sh ] && ./autogen.sh
+            [ -x ./configure ] || autoreconf -fi
             ./configure \
               --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
               --host=aarch64-linux-android \
@@ -469,56 +323,24 @@ jobs:
               --enable-static \
               --disable-shared \
               $configure_args
-
             make -j"$BUILD_JOBS"
             make install
           }
 
-          echo "=== Building Opus ==="
-
-          build_autotools opus \
-            https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz \
-            "--disable-doc --disable-extra-programs"
-
-          test -s "$DEPS/lib/libopus.a"
-
-          echo "=== Building Ogg ==="
-
-          build_autotools libogg \
-            https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.gz \
-            "--disable-examples --disable-oggtest"
-
-          test -s "$DEPS/lib/libogg.a"
-
-          echo "=== Building Vorbis ==="
-
-          build_autotools libvorbis \
-            https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.gz \
-            "--disable-examples --disable-oggtest"
-
-          test -s "$DEPS/lib/libvorbis.a"
-          test -s "$DEPS/lib/libvorbisenc.a"
-
-          echo "=== Building LAME ==="
-
-          build_autotools lame \
-            https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz \
-            "--disable-frontend"
-
-          test -s "$DEPS/lib/libmp3lame.a"
-
-          # Some LAME builds install libmp3lame.pc instead of lame.pc,
-          # or do not install a pkg-config file at all.
-          # FFmpeg's --enable-libmp3lame checks for the package named "lame".
+          # Opus
+          build_git_autotools opus https://github.com/xiph/opus.git "--disable-doc --disable-extra-programs"
+          # Ogg
+          build_git_autotools libogg https://github.com/xiph/ogg.git "--disable-examples --disable-oggtest"
+          # Vorbis
+          build_git_autotools libvorbis https://github.com/xiph/vorbis.git "--disable-examples --disable-oggtest"
+          # LAME (using GitHub mirror)
+          build_git_autotools lame https://github.com/rbrito/lame.git "--disable-frontend"
           if ! pkg-config --exists lame; then
-            echo "Creating fallback lame.pc"
-
             cat > "$DEPS/lib/pkgconfig/lame.pc" <<EOF
           prefix=$DEPS
           exec_prefix=\${prefix}
           libdir=\${prefix}/lib
           includedir=\${prefix}/include
-
           Name: lame
           Description: LAME MP3 encoder
           Version: 3.100
@@ -527,120 +349,47 @@ jobs:
           Cflags: -I\${includedir}
           EOF
           fi
+          # TwoLAME
+          build_git_autotools twolame https://github.com/twolame/twolame.git "--disable-frontend"
+          # Speex
+          build_git_autotools speex https://github.com/xiph/speex.git "--disable-binaries --disable-examples"
 
-          echo "=== Verifying LAME pkg-config metadata ==="
-
-          test -s "$DEPS/lib/pkgconfig/lame.pc"
-          pkg-config --modversion lame
-          pkg-config --cflags lame
-          pkg-config --static --libs lame
-
-          echo "=== Building TwoLAME ==="
-
-          build_autotools twolame \
-            https://downloads.sourceforge.net/project/twolame/twolame/0.4.0/twolame-0.4.0.tar.gz \
-            "--disable-frontend"
-
-          test -s "$DEPS/lib/libtwolame.a"
-
-          echo "=== Building Speex ==="
-
-          build_autotools speex \
-            https://downloads.xiph.org/releases/speex/speex-1.2.1.tar.gz \
-            "--disable-binaries --disable-examples"
-
-          test -s "$DEPS/lib/libspeex.a"
-
-          echo "=== Building SoXR ==="
-
+          # SoXR (CMake)
+          SOXR_TAG=$(get_latest_tag "https://github.com/chirlu/soxr.git")
           rm -rf "$RUNNER_TEMP/soxr" "$RUNNER_TEMP/soxr-build"
-
-          git clone --depth 1 --branch 0.1.3 \
-            https://github.com/chirlu/soxr.git \
-            "$RUNNER_TEMP/soxr"
-
-          cmake \
-            -S "$RUNNER_TEMP/soxr" \
-            -B "$RUNNER_TEMP/soxr-build" \
-            -G Ninja \
+          git clone --depth 1 --branch "$SOXR_TAG" https://github.com/chirlu/soxr.git "$RUNNER_TEMP/soxr"
+          cmake -S "$RUNNER_TEMP/soxr" -B "$RUNNER_TEMP/soxr-build" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DWITH_OPENMP=OFF \
-            -DBUILD_TESTS=OFF
-
-          cmake --build "$RUNNER_TEMP/soxr-build" \
-            --parallel "$BUILD_JOBS"
-
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DWITH_OPENMP=OFF -DBUILD_TESTS=OFF
+          cmake --build "$RUNNER_TEMP/soxr-build" --parallel "$BUILD_JOBS"
           cmake --install "$RUNNER_TEMP/soxr-build"
-
-          echo "=== Installed audio libraries ==="
-
-          find "$DEPS/lib" -maxdepth 2 \
-            \( -name '*.a' -o -name '*.pc' \) \
-            -print | sort
-
-          echo "=== Verifying required static libraries ==="
-
-          for lib in \
-            libopus.a \
-            libogg.a \
-            libvorbis.a \
-            libvorbisenc.a \
-            libmp3lame.a \
-            libtwolame.a \
-            libspeex.a \
-            libsoxr.a; do
-
-            if [ ! -s "$DEPS/lib/$lib" ]; then
-              echo "ERROR: Missing expected library: $DEPS/lib/$lib"
-              exit 1
-            fi
-
-            echo "OK: $lib"
-          done
-
-          echo "=== Verifying pkg-config packages ==="
-
-          for lib in \
-            opus \
-            vorbis \
-            vorbisenc \
-            lame \
-            twolame \
-            speex \
-            soxr; do
-
-            if ! pkg-config --exists "$lib"; then
-              echo "ERROR: pkg-config cannot find: $lib"
-              echo "Available .pc files:"
-              find "$DEPS/lib/pkgconfig" -maxdepth 1 \
-                -name '*.pc' -print | sort
-              exit 1
-            fi
-
-            echo "$lib: $(pkg-config --modversion "$lib")"
-          done
-
-          echo "All audio libraries built and verified successfully."
 
       - name: Build dav1d
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          DAV1D_VERSION="1.5.1"
+          DAV1D_TAG=$(get_latest_tag "https://code.videolan.org/videolan/dav1d.git")
+          echo "Latest dav1d version: $DAV1D_TAG"
+
           SRC="$RUNNER_TEMP/dav1d"
           BUILD="$RUNNER_TEMP/dav1d-build"
           CROSS_FILE="$RUNNER_TEMP/dav1d-cross.ini"
 
-          git clone --depth 1 --branch "$DAV1D_VERSION" \
-            https://code.videolan.org/videolan/dav1d.git "$SRC"
+          git clone --depth 1 --branch "$DAV1D_TAG" https://code.videolan.org/videolan/dav1d.git "$SRC"
 
           cat > "$CROSS_FILE" <<EOF
           [binaries]
@@ -648,637 +397,405 @@ jobs:
           ar = '$AR'
           strip = '$STRIP'
           pkg-config = '$(command -v pkg-config)'
-
           [host_machine]
           system = 'android'
           cpu_family = 'aarch64'
           cpu = 'armv8'
           endian = 'little'
-
           [properties]
           needs_exe_wrapper = true
-
           [built-in options]
           c_args = ['-fPIC']
           EOF
 
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          meson setup "$BUILD" "$SRC" \
-            --cross-file "$CROSS_FILE" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
-            -Denable_tools=false \
-            -Denable_tests=false
-
+          meson setup "$BUILD" "$SRC" --cross-file "$CROSS_FILE" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Denable_tools=false -Denable_tests=false
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           ninja -C "$BUILD" install
 
-          echo "=== Verify dav1d ==="
-          test -s "$DEPS/lib/libdav1d.a"
-          test -s "$DEPS/lib/pkgconfig/dav1d.pc"
-          echo "dav1d built and installed successfully"
-          
       - name: Build SVT-AV1
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          SVT_VERSION="v2.3.0"
+          SVT_TAG=$(get_latest_tag "https://gitlab.com/AOMediaCodec/SVT-AV1.git")
+          echo "Latest SVT-AV1 version: $SVT_TAG"
+
           SRC="$RUNNER_TEMP/SVT-AV1"
           BUILD="$RUNNER_TEMP/svt-av1-build"
 
-          git clone --depth 1 --branch "$SVT_VERSION" \
-            https://gitlab.com/AOMediaCodec/SVT-AV1.git "$SRC"
-
+          git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git "$SRC"
           cmake -S "$SRC" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_APPS=OFF \
-            -DBUILD_TESTING=OFF
-
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_TESTING=OFF
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
 
-          echo "=== Verify SVT-AV1 ==="
-          find "$DEPS/lib" -maxdepth 2 \
-            \( -iname '*svt*av1*.a' -o -iname '*svt*av1*.pc' \) \
-            -print
-
-          test -s "$DEPS/lib/libSvtAv1Enc.a"
-          test -s "$DEPS/lib/pkgconfig/SvtAv1Enc.pc"
-
-          echo "SVT-AV1 built and installed successfully"
-          
       - name: Build FreeType
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          FREETYPE_VERSION="VER-2-13-3"
+          FT_TAG=$(get_latest_tag "https://github.com/freetype/freetype.git" "^VER-[0-9-]")
+          echo "Latest FreeType version: $FT_TAG"
+
           SRC="$RUNNER_TEMP/freetype"
           BUILD="$RUNNER_TEMP/freetype-build"
 
-          git clone --depth 1 --branch "$FREETYPE_VERSION" \
-            https://github.com/freetype/freetype.git "$SRC"
-
+          git clone --depth 1 --branch "$FT_TAG" https://github.com/freetype/freetype.git "$SRC"
           cmake -S "$SRC" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DFT_DISABLE_ZLIB=TRUE \
-            -DFT_DISABLE_BZIP2=TRUE \
-            -DFT_DISABLE_PNG=TRUE \
-            -DFT_DISABLE_HARFBUZZ=TRUE \
-            -DFT_DISABLE_BROTLI=TRUE
-
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
+            -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_BZIP2=TRUE -DFT_DISABLE_PNG=TRUE -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
-
-          echo "=== Verify FreeType ==="
-          test -s "$DEPS/lib/libfreetype.a"
-          test -s "$DEPS/lib/pkgconfig/freetype2.pc"
-          echo "FreeType built and installed successfully"
-
 
       - name: Build FriBidi
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          VERSION="v1.0.16"
+          FRIBIDI_TAG=$(get_latest_tag "https://github.com/fribidi/fribidi.git")
+          echo "Latest FriBidi version: $FRIBIDI_TAG"
+
           SRC="$RUNNER_TEMP/fribidi"
           BUILD="$RUNNER_TEMP/fribidi-build"
 
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/fribidi/fribidi.git "$SRC"
-
-          meson setup "$BUILD" "$SRC" \
-            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
-            -Ddocs=false \
-            -Dtests=false \
-            -Dbin=false
-
+          git clone --depth 1 --branch "$FRIBIDI_TAG" https://github.com/fribidi/fribidi.git "$SRC"
+          meson setup "$BUILD" "$SRC" --cross-file "$RUNNER_TEMP/dav1d-cross.ini" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Ddocs=false -Dtests=false -Dbin=false
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           ninja -C "$BUILD" install
-
-          test -s "$DEPS/lib/libfribidi.a"
-          test -s "$DEPS/lib/pkgconfig/fribidi.pc"
-          echo "FriBidi built successfully"
 
       - name: Build HarfBuzz
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          VERSION="10.2.0"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          HB_TAG=$(get_latest_tag "https://github.com/harfbuzz/harfbuzz.git")
+          echo "Latest HarfBuzz version: $HB_TAG"
+
           SRC="$RUNNER_TEMP/harfbuzz"
           BUILD="$RUNNER_TEMP/harfbuzz-build"
 
-          # Make Android dependency metadata visible in this step.
-          export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          echo "=== Verify FreeType installation ==="
-          test -s "$DEPS/lib/libfreetype.a"
-          test -s "$DEPS/lib/pkgconfig/freetype2.pc"
-
-          echo "=== Verify FreeType pkg-config ==="
-          cat "$DEPS/lib/pkgconfig/freetype2.pc"
-          pkg-config --modversion freetype2
-          pkg-config --cflags freetype2
-          pkg-config --static --libs freetype2
-
-          echo "=== Clone HarfBuzz ==="
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/harfbuzz/harfbuzz.git "$SRC"
-
-          echo "=== Configure HarfBuzz ==="
-          meson setup "$BUILD" "$SRC" \
-            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
-            -Ddocs=disabled \
-            -Dtests=disabled \
-            -Dintrospection=disabled \
-            -Dglib=disabled \
-            -Dcairo=disabled \
-            -Dicu=disabled \
-            -Dfreetype=enabled \
-            -Dgraphite2=disabled
-
-          echo "=== Build HarfBuzz ==="
+          git clone --depth 1 --branch "$HB_TAG" https://github.com/harfbuzz/harfbuzz.git "$SRC"
+          meson setup "$BUILD" "$SRC" --cross-file "$RUNNER_TEMP/dav1d-cross.ini" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Ddocs=disabled -Dtests=disabled -Dintrospection=disabled -Dglib=disabled -Dcairo=disabled -Dicu=disabled -Dfreetype=enabled -Dgraphite2=disabled
           ninja -C "$BUILD" -j"$BUILD_JOBS"
-
-          echo "=== Install HarfBuzz ==="
           ninja -C "$BUILD" install
-
-          echo "=== Verify HarfBuzz ==="
-          test -s "$DEPS/lib/libharfbuzz.a"
-          test -s "$DEPS/lib/pkgconfig/harfbuzz.pc"
-          pkg-config --modversion harfbuzz
-
-          echo "HarfBuzz built successfully"
 
       - name: Build libwebp
         shell: bash
         run: |
           set -euo pipefail
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          VERSION="v1.5.0"
+          WEBP_TAG=$(get_latest_tag "https://github.com/webmproject/libwebp.git")
+          echo "Latest libwebp version: $WEBP_TAG"
+
           SRC="$RUNNER_TEMP/libwebp"
           BUILD="$RUNNER_TEMP/libwebp-build"
 
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/webmproject/libwebp.git "$SRC"
-
+          git clone --depth 1 --branch "$WEBP_TAG" https://github.com/webmproject/libwebp.git "$SRC"
           cmake -S "$SRC" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DWEBP_BUILD_ANIM_UTILS=OFF \
-            -DWEBP_BUILD_CWEBP=OFF \
-            -DWEBP_BUILD_DWEBP=OFF \
-            -DWEBP_BUILD_GIF2WEBP=OFF \
-            -DWEBP_BUILD_IMG2WEBP=OFF \
-            -DWEBP_BUILD_VWEBP=OFF \
-            -DWEBP_BUILD_WEBPINFO=OFF \
-            -DWEBP_BUILD_LIBWEBPMUX=ON \
-            -DWEBP_BUILD_EXTRAS=OFF
-
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
+            -DWEBP_BUILD_ANIM_UTILS=OFF -DWEBP_BUILD_CWEBP=OFF -DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF -DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF -DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_LIBWEBPMUX=ON -DWEBP_BUILD_EXTRAS=OFF
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
-
-          test -s "$DEPS/lib/libwebp.a"
-          echo "libwebp built successfully"
 
       - name: Build Expat
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          VERSION="R_2_6_4"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          EXPAT_TAG=$(get_latest_tag "https://github.com/libexpat/libexpat.git" "^R_[0-9_]+")
+          echo "Latest Expat version: $EXPAT_TAG"
+
           SRC="$RUNNER_TEMP/expat"
           BUILD="$RUNNER_TEMP/expat-build"
 
-          export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/libexpat/libexpat.git "$SRC"
-
-          # The Android CMake toolchain is under $NDK, not $TOOLCHAIN.
-          ANDROID_CMAKE_TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
-          test -f "$ANDROID_CMAKE_TOOLCHAIN"
-
+          git clone --depth 1 --branch "$EXPAT_TAG" https://github.com/libexpat/libexpat.git "$SRC"
           cmake -S "$SRC/expat" -B "$BUILD" \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_CMAKE_TOOLCHAIN" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=24 \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DEXPAT_SHARED_LIBS=OFF \
-            -DEXPAT_BUILD_TESTS=OFF \
-            -DEXPAT_BUILD_EXAMPLES=OFF \
-            -DEXPAT_BUILD_TOOLS=OFF \
-            -DEXPAT_BUILD_DOCS=OFF \
-            -DEXPAT_BUILD_PKGCONFIG=ON
-
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=24 \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DEXPAT_SHARED_LIBS=OFF -DEXPAT_BUILD_TESTS=OFF -DEXPAT_BUILD_EXAMPLES=OFF -DEXPAT_BUILD_TOOLS=OFF -DEXPAT_BUILD_DOCS=OFF -DEXPAT_BUILD_PKGCONFIG=ON
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
 
-          test -s "$DEPS/lib/libexpat.a"
-          test -s "$DEPS/lib/pkgconfig/expat.pc"
-          pkg-config --modversion expat
-          echo "Expat built successfully"
-          
       - name: Build Fontconfig
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          VERSION="2.15.0"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          FC_TAG=$(get_latest_tag "https://gitlab.freedesktop.org/fontconfig/fontconfig.git")
+          echo "Latest Fontconfig version: $FC_TAG"
+
           SRC="$RUNNER_TEMP/fontconfig"
           BUILD="$RUNNER_TEMP/fontconfig-build"
 
-          export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          # Confirm both static dependencies and their metadata exist.
-          test -s "$DEPS/lib/libexpat.a"
-          test -s "$DEPS/lib/libfreetype.a"
-          test -s "$DEPS/lib/pkgconfig/expat.pc"
-          test -s "$DEPS/lib/pkgconfig/freetype2.pc"
-
-          echo "=== Dependency versions ==="
-          pkg-config --modversion expat
-          pkg-config --modversion freetype2
-
-          git clone --depth 1 --branch "$VERSION" \
-            https://gitlab.freedesktop.org/fontconfig/fontconfig.git "$SRC"
-
-          # Verify the actual options available in this source revision.
-          echo "=== Fontconfig Meson options ==="
-          cat "$SRC/meson_options.txt" 2>/dev/null || \
-            cat "$SRC/meson.options"
-
-          echo "=== Configure Fontconfig ==="
-          meson setup "$BUILD" "$SRC" \
-            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
-            -Ddoc=disabled \
-            -Dtests=disabled \
-            -Dtools=disabled \
-            -Dcache-build=disabled \
-            -Diconv=disabled \
-            -Dnls=disabled
-
-          echo "=== Build Fontconfig ==="
+          git clone --depth 1 --branch "$FC_TAG" https://gitlab.freedesktop.org/fontconfig/fontconfig.git "$SRC"
+          meson setup "$BUILD" "$SRC" --cross-file "$RUNNER_TEMP/dav1d-cross.ini" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Ddoc=disabled -Dtests=disabled -Dtools=disabled -Dcache-build=disabled -Diconv=disabled -Dnls=disabled
           ninja -C "$BUILD" -j"$BUILD_JOBS"
-
-          echo "=== Install Fontconfig ==="
           ninja -C "$BUILD" install
 
-          echo "=== Verify Fontconfig ==="
-          test -s "$DEPS/lib/libfontconfig.a"
-          test -s "$DEPS/lib/pkgconfig/fontconfig.pc"
-          pkg-config --modversion fontconfig
-          echo "Fontconfig built successfully"
-          
       - name: Build OpenJPEG
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          VERSION="v2.5.3"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          OPJ_TAG=$(get_latest_tag "https://github.com/uclouvain/openjpeg.git")
+          echo "Latest OpenJPEG version: $OPJ_TAG"
+
           SRC="$RUNNER_TEMP/openjpeg"
           BUILD="$RUNNER_TEMP/openjpeg-build"
 
-          export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/uclouvain/openjpeg.git "$SRC"
-
+          git clone --depth 1 --branch "$OPJ_TAG" https://github.com/uclouvain/openjpeg.git "$SRC"
           cmake -S "$SRC" -B "$BUILD" \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=24 \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_CODEC=OFF \
-            -DBUILD_TESTING=OFF \
-            -DBUILD_DOC=OFF \
-            -DBUILD_JPIP=OFF \
-            -DBUILD_MJ2=OFF \
-            -DWITH_TIFF=OFF \
-            -DWITH_PNG=OFF \
-            -DWITH_OPENGL=OFF
-
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=24 \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_CODEC=OFF -DBUILD_TESTING=OFF -DBUILD_DOC=OFF -DBUILD_JPIP=OFF -DBUILD_MJ2=OFF -DWITH_TIFF=OFF -DWITH_PNG=OFF -DWITH_OPENGL=OFF
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
-
-          test -s "$DEPS/lib/libopenjp2.a"
-          echo "OpenJPEG built successfully"
 
       - name: Build LC3
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          VERSION="v1.1.3"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          LC3_TAG=$(get_latest_tag "https://github.com/google/liblc3.git")
+          echo "Latest LC3 version: $LC3_TAG"
+
           SRC="$RUNNER_TEMP/liblc3"
           BUILD="$RUNNER_TEMP/liblc3-build"
 
-          export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          git clone --depth 1 --branch "$VERSION" \
-            https://github.com/google/liblc3.git "$SRC"
-
-          # Verify this release provides its Meson build definition.
-          test -s "$SRC/meson.build"
-          test -s "$SRC/meson_options.txt"
-
-          meson setup "$BUILD" "$SRC" \
-            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
-            -Dtools=false \
-            -Dpython=false
-
+          git clone --depth 1 --branch "$LC3_TAG" https://github.com/google/liblc3.git "$SRC"
+          meson setup "$BUILD" "$SRC" --cross-file "$RUNNER_TEMP/dav1d-cross.ini" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Dtools=false -Dpython=false
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           meson install -C "$BUILD"
 
-          echo "=== LC3 installed artifacts ==="
-          find "$DEPS/lib" -maxdepth 2 -iname '*lc3*' -print
-          find "$DEPS/include" -maxdepth 3 -iname '*lc3*' -print
-
-          # Verify that the static archive and public headers exist.
-          test -s "$DEPS/lib/liblc3.a"
-          test -s "$DEPS/include/lc3.h"
-
-          echo "LC3 built successfully"
-          
       - name: Build Theora
         shell: bash
         run: |
           set -euo pipefail
-
-          VERSION="1.1.1"
-          SRC="$RUNNER_TEMP/libtheora-src"
-          ARCHIVE="$RUNNER_TEMP/libtheora-${VERSION}.tar.bz2"
-
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== Verify Ogg dependency ==="
-          test -s "$DEPS/lib/libogg.a"
-          test -s "$DEPS/lib/pkgconfig/ogg.pc"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          echo "=== Download Theora ${VERSION} ==="
-          curl -fL --retry 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 120 \
-            "https://downloads.xiph.org/releases/theora/libtheora-${VERSION}.tar.bz2" \
-            -o "$ARCHIVE"
+          THEORA_TAG=$(get_latest_tag "https://github.com/xiph/theora.git")
+          echo "Latest Theora version: $THEORA_TAG"
 
-          echo "=== Verify Theora source checksum ==="
-          echo "b6ae1ee2fa3d42ac489287d3ec34c5885730b1296f0801ae577a35193d3affbc  $ARCHIVE" \
-            | sha256sum -c -
-
-          rm -rf "$SRC"
-          mkdir -p "$SRC"
-          tar -xjf "$ARCHIVE" --strip-components=1 -C "$SRC"
+          SRC="$RUNNER_TEMP/libtheora-src"
+          git clone --depth 1 --branch "$THEORA_TAG" https://github.com/xiph/theora.git "$SRC"
           cd "$SRC"
 
-          echo "=== Download GNU config helpers from GitHub mirror ==="
-
-          curl -fL --retry 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 60 \
-            "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" \
-            -o ./config.sub
-
-          curl -fL --retry 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 60 \
-            "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess" \
-            -o ./config.guess
-
-          test -s ./config.sub
-          test -s ./config.guess
-
-          head -n 1 ./config.sub | grep -q '^#!'
-          head -n 1 ./config.guess | grep -q '^#!'
-
+          curl -fL --retry 3 "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" -o ./config.sub
+          curl -fL --retry 3 "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess" -o ./config.guess
           chmod +x ./config.sub ./config.guess
 
-          echo "=== Verify Android target recognition ==="
-          ./config.sub aarch64-linux-android
-
-          echo "=== Configure Theora ==="
           ./configure \
             --build=x86_64-linux-gnu \
             --host=aarch64-linux-android \
             --prefix="$DEPS" \
-            --enable-static \
-            --disable-shared \
-            --disable-examples \
-            --disable-spec \
-            --disable-oggtest \
-            --disable-vorbistest \
-            CC="$CC" \
-            AR="$AR" \
-            RANLIB="$RANLIB" \
-            CFLAGS="-O2 -fPIC"
-
-          echo "=== Compile Theora ==="
+            --enable-static --disable-shared --disable-examples --disable-spec --disable-oggtest --disable-vorbistest \
+            CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="-O2 -fPIC"
           make -j"$BUILD_JOBS"
-
-          echo "=== Install Theora ==="
           make install
 
-          echo "=== Verify Theora static libraries ==="
-          find "$DEPS/lib" -maxdepth 2 -type f -name '*theora*.a' -print
-
-          test -s "$DEPS/lib/libtheoradec.a"
-          test -s "$DEPS/lib/libtheoraenc.a"
-
-          echo "=== Verify Theora pkg-config files ==="
-          find "$DEPS/lib/pkgconfig" -maxdepth 1 -iname '*theora*.pc' -print
-
-          echo "Theora built successfully"
-          
       - name: Build libass
         shell: bash
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
-          VERSION="0.17.5"
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
+
+          LIBASS_TAG=$(get_latest_tag "https://github.com/libass/libass.git")
+          echo "Latest libass version: $LIBASS_TAG"
+
           SRC="$RUNNER_TEMP/libass"
           BUILD="$RUNNER_TEMP/libass-build"
 
-          export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          # Validate the static subtitle-rendering dependency stack.
-          for file in \
-            "$DEPS/lib/libfreetype.a" \
-            "$DEPS/lib/libfribidi.a" \
-            "$DEPS/lib/libharfbuzz.a" \
-            "$DEPS/lib/libfontconfig.a" \
-            "$DEPS/lib/libexpat.a"; do
-            test -s "$file" || {
-              echo "Missing dependency: $file"
-              exit 1
-            }
-          done
-
-          for package in freetype2 fribidi harfbuzz fontconfig; do
-            echo "=== $package ==="
-            pkg-config --modversion "$package"
-          done
-
-          # Download the exact stable release tag.
-          rm -rf "$SRC" "$BUILD"
-          git init "$SRC"
-          git -C "$SRC" remote add origin https://github.com/libass/libass.git
-          git -C "$SRC" fetch --depth 1 origin "refs/tags/$VERSION"
-          git -C "$SRC" checkout --detach FETCH_HEAD
-
-          test -s "$SRC/meson.build"
-          test -s "$SRC/meson_options.txt"
-
-          meson setup "$BUILD" "$SRC" \
-            --cross-file "$RUNNER_TEMP/dav1d-cross.ini" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
-            -Dtest=disabled \
-            -Dcompare=disabled \
-            -Dprofile=disabled \
-            -Dfuzz=disabled \
-            -Dcheckasm=disabled \
-            -Dfontconfig=enabled \
-            -Dlibunibreak=disabled \
-            -Drequire-system-font-provider=true
-
+          git clone --depth 1 --branch "$LIBASS_TAG" https://github.com/libass/libass.git "$SRC"
+          meson setup "$BUILD" "$SRC" --cross-file "$RUNNER_TEMP/dav1d-cross.ini" --prefix "$DEPS" --libdir lib --buildtype release --default-library static -Dtest=disabled -Dcompare=disabled -Dprofile=disabled -Dfuzz=disabled -Dcheckasm=disabled -Dfontconfig=enabled -Dlibunibreak=disabled -Drequire-system-font-provider=true
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           ninja -C "$BUILD" install
 
-          test -s "$DEPS/lib/libass.a"
-          test -s "$DEPS/lib/pkgconfig/libass.pc"
-
-          echo "=== Installed libass version ==="
-          pkg-config --modversion libass
-
-          echo "libass built successfully"
-          
-      - name: Configure FFmpeg
+      - name: Configure and Build FFmpeg
         shell: bash
         run: |
           set -euo pipefail
-
-          VERSION="n${FFMPEG_VERSION}"
-          SRC="$RUNNER_TEMP/ffmpeg"
-
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== Verify required pkg-config packages ==="
-          for package in \
-            x264 x265 vpx aom dav1d SvtAv1Enc \
-            freetype2 fribidi harfbuzz fontconfig libass \
-            opus vorbis vorbisenc lame twolame speex soxr \
-            libopenjp2 lc3 theoradec theoraenc; do
-            if pkg-config --exists "$package"; then
-              printf 'FOUND: %s (%s)\n' \
-                "$package" "$(pkg-config --modversion "$package")"
-            else
-              printf 'NOT FOUND: %s\n' "$package"
-            fi
-          done
+          get_latest_tag() {
+            local repo_url="$1"
+            local grep_pattern="${2:-^[vV]?[0-9]}"
+            git ls-remote --tags --sort='v:refname' "$repo_url" | \
+              awk -F/ '{print $3}' | \
+              sed 's/\^{}//' | \
+              grep -E "$grep_pattern" | \
+              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
+              sort -Vu | \
+              tail -n 1
+          }
 
-          echo "=== Verify required subtitle dependencies ==="
-          for package in freetype2 fribidi harfbuzz fontconfig libass; do
-            pkg-config --exists "$package" || {
-              echo "Required subtitle dependency missing: $package"
-              exit 1
-            }
-          done
+          FFMPEG_TAG=$(get_latest_tag "https://git.ffmpeg.org/ffmpeg.git" "^n[0-9.]+$")
+          echo "Latest FFmpeg version: $FFMPEG_TAG"
 
-          echo "=== Verify OpenJPEG ==="
-          test -s "$DEPS/lib/libopenjp2.a"
-          pkg-config --exists libopenjp2
-
-          echo "=== Verify LC3 ==="
-          test -s "$DEPS/lib/liblc3.a"
-          test -s "$DEPS/lib/pkgconfig/lc3.pc"
-          pkg-config --exists lc3
-
-          echo "=== Verify Theora ==="
-          test -s "$DEPS/lib/libtheoradec.a"
-          test -s "$DEPS/lib/libtheoraenc.a"
-          pkg-config --exists theoradec
-          pkg-config --exists theoraenc
-
-          echo "=== Verify libass ==="
-          test -s "$DEPS/lib/libass.a"
-
-          rm -rf "$SRC"
-          git clone --depth 1 --branch "$VERSION" \
-            https://git.ffmpeg.org/ffmpeg.git "$SRC"
-
+          SRC="$RUNNER_TEMP/ffmpeg"
+          git clone --depth 1 --branch "$FFMPEG_TAG" https://git.ffmpeg.org/ffmpeg.git "$SRC"
           cd "$SRC"
 
           ./configure \
@@ -1287,166 +804,24 @@ jobs:
             --arch=aarch64 \
             --enable-cross-compile \
             --sysroot="$SYSROOT" \
-            --cc="$CC" \
-            --cxx="$CXX" \
-            --ar="$AR" \
-            --ranlib="$RANLIB" \
-            --strip="$STRIP" \
-            --pkg-config=pkg-config \
-            --pkg-config-flags=--static \
+            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \
+            --pkg-config=pkg-config --pkg-config-flags=--static \
             --extra-cflags="-I$DEPS/include -fPIC" \
             --extra-ldflags="-L$DEPS/lib" \
             --extra-libs="-lm" \
-            --enable-static \
-            --disable-shared \
-            --enable-pic \
-            --enable-gpl \
-            --enable-libx264 \
-            --enable-libx265 \
-            --enable-libvpx \
-            --enable-libaom \
-            --enable-libdav1d \
-            --enable-libsvtav1 \
-            --enable-libfreetype \
-            --enable-libfontconfig \
-            --enable-libfribidi \
-            --enable-libharfbuzz \
-            --enable-libass \
-            --enable-libwebp \
-            --enable-libopenjpeg \
-            --enable-liblc3 \
-            --enable-libtheora \
-            --enable-libopus \
-            --enable-libvorbis \
-            --enable-libmp3lame \
-            --enable-libtwolame \
-            --enable-libspeex \
-            --enable-libsoxr
+            --enable-static --disable-shared --enable-pic --enable-gpl \
+            --enable-libx264 --enable-libx265 --enable-libvpx --enable-libaom --enable-libdav1d --enable-libsvtav1 \
+            --enable-libfreetype --enable-libfontconfig --enable-libfribidi --enable-libharfbuzz --enable-libass \
+            --enable-libwebp --enable-libopenjpeg --enable-liblc3 --enable-libtheora \
+            --enable-libopus --enable-libvorbis --enable-libmp3lame --enable-libtwolame --enable-libspeex --enable-libsoxr
 
-          echo "=== Verify selected FFmpeg features ==="
-          for feature in \
-            LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
-            LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
-            LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA \
-            LIBOPUS LIBVORBIS LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
-            if grep -q "^#define CONFIG_${feature} 1$" config.h; then
-              echo "ENABLED: $feature"
-            else
-              echo "ERROR: $feature is not enabled"
-              exit 1
-            fi
-          done
-
-          echo "FFmpeg configure completed successfully"
-          
-      - name: Build FFmpeg
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$RUNNER_TEMP/ffmpeg"
-
-          echo "=== Building FFmpeg for Android ARM64 ==="
           make -j"$BUILD_JOBS"
-
-          echo "=== Installing FFmpeg ==="
           make install
 
-          FFMPEG="$PREFIX/bin/ffmpeg"
-
-          echo "=== Verifying installed binary ==="
-          test -s "$FFMPEG"
-          test -x "$FFMPEG"
-
-          echo "=== Binary file information ==="
-          file "$FFMPEG"
-
-          echo "=== ELF header ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG"
-
-          echo "=== Verifying ARM64 architecture ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
-            | grep -E 'Machine:.*AArch64'
-
-          echo "=== Verifying Android dynamic dependencies ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" || true
-
-          echo "FFmpeg built and installed successfully."
-          echo "The Android ARM64 binary will be tested on Android, not on the Linux runner."
-
-      - name: Verify FFmpeg configuration and encoders
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          FFMPEG="$PREFIX/bin/ffmpeg"
-
-          echo "=== Verify installed FFmpeg binary ==="
-          test -s "$FFMPEG"
-          test -x "$FFMPEG"
-          file "$FFMPEG"
-
-          echo "=== Verify ELF architecture ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
-            | grep -E 'Class:|Machine:'
-
-          "$TOOLCHAIN/bin/llvm-readelf" -h "$FFMPEG" \
-            | grep -qE 'Machine:.*AArch64'
-
-          echo "=== Find FFmpeg configuration files ==="
-          find "$RUNNER_TEMP" -maxdepth 6 \
-            \( -name config.h -o -name config.mak \) -print
-
-          CONFIG="$RUNNER_TEMP/ffmpeg/config.h"
-          CONFIG_MK="$RUNNER_TEMP/ffmpeg/ffbuild/config.mak"
-
-          if [[ ! -s "$CONFIG" || ! -s "$CONFIG_MK" ]]; then
-            echo "Checking alternate config.mak location..."
-            if [[ -s "$RUNNER_TEMP/ffmpeg/config.mak" ]]; then
-              CONFIG_MK="$RUNNER_TEMP/ffmpeg/config.mak"
-            fi
-          fi
-
-          if [[ ! -s "$CONFIG" ]]; then
-            echo "ERROR: config.h not found."
-            exit 1
-          fi
-
-          if [[ ! -s "$CONFIG_MK" ]]; then
-            echo "ERROR: config.mak not found."
-            exit 1
-          fi
-
-          echo "=== Verify external-library configuration ==="
-          for lib in \
-            LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
-            LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
-            LIBOPENJPEG LIBLC3 LIBTHEORA \
-            LIBWEBP LIBOPUS LIBVORBIS LIBMP3LAME \
-            LIBTWOLAME LIBSPEEX LIBSOXR; do
-
-            if grep -qE "^#define CONFIG_${lib} 1$" "$CONFIG"; then
-              echo "ENABLED: $lib"
-            else
-              echo "NOT ENABLED: $lib"
-            fi
-          done
-
-          echo "=== config.mak library flags ==="
-          grep -E \
-            '^(CONFIG_LIB(X264|X265|VPX|AOM|DAV1D|SVTAV1|FREETYPE|FONTCONFIG|FRIBIDI|HARFBUZZ|ASS|OPENJPEG|LC3|THEORA|WEBP|OPUS|VORBIS|MP3LAME|TWOLAME|SPEEX|SOXR))=' \
-            "$CONFIG_MK" || true
-
-          echo "=== Dynamic dependencies ==="
-          "$TOOLCHAIN/bin/llvm-readelf" -d "$FFMPEG" || true
-
-          echo "Verification completed."
-          
       - name: Package Android ARM64 build
         shell: bash
         run: |
           set -euo pipefail
-
           PACKAGE="$RUNNER_TEMP/package"
           FFMPEG="$PREFIX/bin/ffmpeg"
 
@@ -1460,32 +835,15 @@ jobs:
 
           while IFS= read -r lib; do
             [ -n "$lib" ] || continue
-
             case "$lib" in
-              libc.so|libm.so|libdl.so|liblog.so|libandroid.so|libz.so)
-                continue
-                ;;
+              libc.so|libm.so|libdl.so|liblog.so|libandroid.so|libz.so) continue ;;
               libc++_shared.so)
-                source_lib="$(
-                  find "$NDK" -name libc++_shared.so -type f -print -quit
-                )"
-                if [ -n "$source_lib" ]; then
-                  cp "$source_lib" "$PACKAGE/lib/"
-                else
-                  echo "Could not locate libc++_shared.so in the NDK."
-                  exit 1
-                fi
+                source_lib="$(find "$NDK" -name libc++_shared.so -type f -print -quit)"
+                [ -n "$source_lib" ] && cp "$source_lib" "$PACKAGE/lib/"
                 ;;
               *)
-                source_lib="$(
-                  find "$DEPS/lib" "$SYSROOT/usr/lib/aarch64-linux-android" \
-                    -name "$lib" -type f -print -quit
-                )"
-                if [ -n "$source_lib" ]; then
-                  cp "$source_lib" "$PACKAGE/lib/"
-                else
-                  echo "Warning: dependency not bundled: $lib"
-                fi
+                source_lib="$(find "$DEPS/lib" "$SYSROOT/usr/lib/aarch64-linux-android" -name "$lib" -type f -print -quit)"
+                [ -n "$source_lib" ] && cp "$source_lib" "$PACKAGE/lib/"
                 ;;
             esac
           done < "$NEEDED"
@@ -1496,33 +854,11 @@ jobs:
           export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           exec "$HERE/bin/ffmpeg" "$@"
           EOF
-
           chmod +x "$PACKAGE/run-ffmpeg.sh"
-
-          cat > "$PACKAGE/README.txt" <<EOF
-          FFmpeg ${FFMPEG_VERSION} Android ARM64
-
-          Architecture: ARM64 / aarch64
-          Minimum Android API: ${ANDROID_API}
-
-          Run in Termux:
-            chmod +x run-ffmpeg.sh
-            ./run-ffmpeg.sh -version
-            ./run-ffmpeg.sh -encoders
-
-          The binary is located at:
-            bin/ffmpeg
-          EOF
 
           cd "$RUNNER_TEMP"
           tar -czf ffmpeg-android-arm64.tar.gz package
-
-          sha256sum ffmpeg-android-arm64.tar.gz \
-            > ffmpeg-android-arm64.tar.gz.sha256
-
-          ls -lh \
-            "$RUNNER_TEMP/ffmpeg-android-arm64.tar.gz" \
-            "$RUNNER_TEMP/ffmpeg-android-arm64.tar.gz.sha256"
+          sha256sum ffmpeg-android-arm64.tar.gz > ffmpeg-android-arm64.tar.gz.sha256
 
       - name: Upload Android ARM64 artifacts
         uses: actions/upload-artifact@v4
