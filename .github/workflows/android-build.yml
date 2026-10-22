@@ -453,8 +453,16 @@ jobs:
               --disable-shared \
               $configure_args
 
-            make -j"$BUILD_JOBS"
-            make install
+            if [ "$name" = "twolame" ]; then
+              # TwoLAME's documentation Makefile expects a generated
+              # twolame.1 file. Build and install the library directly,
+              # skipping the broken documentation and frontend targets.
+              make -C libtwolame -j"$BUILD_JOBS"
+              make -C libtwolame install
+            else
+              make -j"$BUILD_JOBS"
+              make install
+            fi
 
             echo "Successfully built $name"
           }
