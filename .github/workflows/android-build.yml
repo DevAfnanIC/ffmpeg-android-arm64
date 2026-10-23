@@ -122,56 +122,79 @@ jobs:
         run: |
           set -euo pipefail
 
+          X265_REPO="https://github.com/Multicorewareinc/x265.git"
+
           get_latest_tag() {
             local repo_url="$1"
-            local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
-              tail -n 1
+            local pattern="$2"
+            local tags selected
+
+            tags="$(git ls-remote --tags --refs "$repo_url")"
+            selected="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(/^refs\/tags\//, "", $2); print $2}' |
+                grep -E "$pattern" |
+                sort -Vu |
+                tail -n 1
+            )"
+
+            if [ -z "$selected" ]; then
+              echo "::error::No stable release tag found for $repo_url" >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected"
           }
 
-          X265_VERSION=$(get_latest_tag "https://bitbucket.org/multicoreware/x265_git.git")
-          echo "Latest x265 version: $X265_VERSION"
+          X265_VERSION="$(get_latest_tag "$X265_REPO" '^[0-9]+(\.[0-9]+)+$')"
+          echo "Selected x265 release: $X265_VERSION"
 
-          git clone --depth 1 --branch "$X265_VERSION" \
-            https://bitbucket.org/multicoreware/x265_git.git \
-            "$RUNNER_TEMP/x265"
-
-          X265_SOURCE="$RUNNER_TEMP/x265/source"
+          SRC="$RUNNER_TEMP/x265"
+          X265_SOURCE="$SRC/source"
           X265_BUILD="$RUNNER_TEMP/x265-build"
           TARGET="aarch64-linux-android${ANDROID_API}"
 
-          mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
+          rm -rf "$SRC" "$X265_BUILD"
+          git clone --depth 1 --branch "$X265_VERSION" "$X265_REPO" "$SRC"
+
+          test -f "$X265_SOURCE/CMakeLists.txt"
 
           python3 - "$X265_SOURCE/CMakeLists.txt" "$ANDROID_API" <<'PY'
           import pathlib, re, sys
+
           path = pathlib.Path(sys.argv[1])
           api = sys.argv[2]
           content = path.read_text()
-          pattern = re.compile(r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}(?P<rest>[^\n]*)$')
+          pattern = re.compile(
+              r'(?m)^(?P<indent>[ \t]*)ARGS[ \t]+\$\{ARM_ARGS\}(?P<rest>[^\n]*)$'
+          )
           matches = list(pattern.finditer(content))
+
           if not matches:
-              raise SystemExit("No ARM_ARGS lines found in x265 CMakeLists.txt")
+              raise SystemExit(
+                  "No ARM_ARGS lines found in x265 CMakeLists.txt; "
+                  "upstream build files may have changed."
+              )
+
           def replace(match):
-              return match.group("indent") + f"ARGS --target=aarch64-linux-android{api} " + "${ARM_ARGS}" + match.group("rest")
+              return (
+                  match.group("indent")
+                  + f"ARGS --target=aarch64-linux-android{api} "
+                  + "${ARM_ARGS}"
+                  + match.group("rest")
+              )
+
           path.write_text(pattern.sub(replace, content))
           print(f"Patched {len(matches)} ARM_ARGS lines.")
           PY
 
-          TARGET_COUNT="$(
-            grep -F -c -- "--target=${TARGET}" "$X265_SOURCE/CMakeLists.txt"
-          )"
-          test "$TARGET_COUNT" -gt 0
+          grep -F -- "--target=${TARGET}" "$X265_SOURCE/CMakeLists.txt" >/dev/null
+
+          mkdir -p "$X265_BUILD" "$DEPS/lib" "$DEPS/include" "$DEPS/lib/pkgconfig"
 
           build_x265_variant() {
             local variant="$1"
             shift
-
-            echo "=== Configuring x265: $variant ==="
 
             cmake -S "$X265_SOURCE" -B "$X265_BUILD/$variant" -G Ninja \
               -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
@@ -189,8 +212,7 @@ jobs:
               -DENABLE_CLI=OFF \
               "$@"
 
-            cmake --build "$X265_BUILD/$variant" \
-              --parallel "$BUILD_JOBS"
+            cmake --build "$X265_BUILD/$variant" --parallel "$BUILD_JOBS"
           }
 
           build_x265_variant 10bit \
@@ -212,28 +234,24 @@ jobs:
             -D10BIT_LIBRARY="$X265_BUILD/10bit/libx265.a" \
             -D12BIT_LIBRARY="$X265_BUILD/12bit/libx265.a"
 
-          install -Dm644 \
-            "$X265_BUILD/8bit/libx265.a" \
-            "$DEPS/lib/libx265.a"
+          test -s "$X265_BUILD/8bit/libx265.a"
+          test -s "$X265_BUILD/10bit/libx265.a"
+          test -s "$X265_BUILD/12bit/libx265.a"
 
-          install -Dm644 \
-            "$X265_SOURCE/x265.h" \
-            "$DEPS/include/x265.h"
+          install -Dm644 "$X265_BUILD/8bit/libx265.a" "$DEPS/lib/libx265.a"
+          install -Dm644 "$X265_SOURCE/x265.h" "$DEPS/include/x265.h"
 
           X265_CONFIG_HEADER="$(
-            find "$X265_BUILD/8bit" -type f \
-              -name x265_config.h -print -quit
+            find "$X265_BUILD/8bit" -type f -name x265_config.h -print -quit
           )"
 
           if [ -z "$X265_CONFIG_HEADER" ]; then
-            echo "ERROR: x265_config.h was not generated in the 8-bit build."
+            echo "::error::x265_config.h was not generated."
             find "$X265_BUILD" -type f -name x265_config.h -print
             exit 1
           fi
 
-          install -Dm644 \
-            "$X265_CONFIG_HEADER" \
-            "$DEPS/include/x265_config.h"
+          install -Dm644 "$X265_CONFIG_HEADER" "$DEPS/include/x265_config.h"
 
           cat > "$DEPS/lib/pkgconfig/x265.pc" <<EOF
           prefix=$DEPS
@@ -254,7 +272,7 @@ jobs:
           test -s "$DEPS/include/x265_config.h"
           test -s "$DEPS/lib/pkgconfig/x265.pc"
 
-          echo "x265 8-bit, 10-bit and 12-bit build completed successfully."
+          echo "x265 $X265_VERSION built for 8-bit, 10-bit and 12-bit APIs."
           
       - name: Build libvpx for Android ARM64
         shell: bash
@@ -640,37 +658,62 @@ jobs:
           ninja -C "$BUILD" -j"$BUILD_JOBS"
           ninja -C "$BUILD" install
 
+
       - name: Build SVT-AV1
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rc=$?; echo "::error::SVT-AV1 build failed at line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
+
+          REPO="https://gitlab.com/AOMediaCodec/SVT-AV1.git"
+
           get_latest_tag() {
             local repo_url="$1"
-            local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
-              tail -n 1
+            local tags selected
+
+            tags="$(git ls-remote --tags --refs "$repo_url")"
+            selected="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(/^refs\/tags\//, "", $2); print $2}' |
+                grep -E '^v?[0-9]+(\.[0-9]+)+$' |
+                sort -Vu |
+                tail -n 1
+            )"
+
+            if [ -z "$selected" ]; then
+              echo "::error::No stable numeric SVT-AV1 release tag found." >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected"
           }
 
-          SVT_TAG=$(get_latest_tag "https://gitlab.com/AOMediaCodec/SVT-AV1.git")
-          echo "Latest SVT-AV1 version: $SVT_TAG"
+          SVT_TAG="$(get_latest_tag "$REPO")"
+          echo "Selected stable SVT-AV1 release: $SVT_TAG"
 
           SRC="$RUNNER_TEMP/SVT-AV1"
           BUILD="$RUNNER_TEMP/svt-av1-build"
 
-          git clone --depth 1 --branch "$SVT_TAG" https://gitlab.com/AOMediaCodec/SVT-AV1.git "$SRC"
+          rm -rf "$SRC" "$BUILD"
+          git clone --depth 1 --branch "$SVT_TAG" "$REPO" "$SRC"
+
           cmake -S "$SRC" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF -DBUILD_APPS=OFF -DBUILD_TESTING=OFF
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_APPS=OFF \
+            -DBUILD_TESTING=OFF
+
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
 
+          echo "SVT-AV1 $SVT_TAG built and installed."
+          
       - name: Build FreeType
         shell: bash
         run: |
