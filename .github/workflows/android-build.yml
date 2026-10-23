@@ -278,65 +278,98 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          REPO="https://chromium.googlesource.com/webm/libvpx"
+
           get_latest_tag() {
-            local repo_url="$1"
-            local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
-              tail -n 1
+            local tags selected
+
+            tags="$(git ls-remote --tags --refs "$REPO")"
+            selected="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(/^refs\/tags\//, "", $2); print $2}' |
+                grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
+                sort -V |
+                tail -n 1
+            )"
+
+            if [ -z "$selected" ]; then
+              echo "::error::No stable numeric libvpx release tag found." >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected"
           }
 
-          VPX_VERSION=$(get_latest_tag "https://chromium.googlesource.com/webm/libvpx")
-          echo "Latest libvpx version: $VPX_VERSION"
+          VPX_VERSION="$(get_latest_tag)"
+          echo "Selected libvpx release: $VPX_VERSION"
 
-          git clone --depth 1 --branch "$VPX_VERSION" \
-            https://chromium.googlesource.com/webm/libvpx \
-            "$RUNNER_TEMP/libvpx"
+          SRC="$RUNNER_TEMP/libvpx"
+          rm -rf "$SRC"
 
-          cd "$RUNNER_TEMP/libvpx"
+          git clone --depth 1 --branch "$VPX_VERSION" "$REPO" "$SRC"
+
+          cd "$SRC"
           export CC="$CC" CXX="$CXX" AR="$AR" AS="$CC" LD="$CXX" STRIP="$STRIP" CROSS=""
 
           ./configure \
             --prefix="$DEPS" \
             --target=arm64-android-gcc \
-            --disable-examples --disable-tools --disable-docs --disable-unit-tests \
-            --disable-shared --enable-static --enable-pic --enable-vp8 --enable-vp9 \
-            --disable-webm-io --disable-libyuv \
+            --disable-examples \
+            --disable-tools \
+            --disable-docs \
+            --disable-unit-tests \
+            --disable-shared \
+            --enable-static \
+            --enable-pic \
+            --enable-vp8 \
+            --enable-vp9 \
+            --disable-webm-io \
+            --disable-libyuv \
             --extra-cflags="--target=aarch64-linux-android${ANDROID_API} --sysroot=${SYSROOT}" \
             --extra-cxxflags="--target=aarch64-linux-android${ANDROID_API} --sysroot=${SYSROOT}"
 
           make -j"$BUILD_JOBS"
           make install
 
+          test -s "$DEPS/lib/libvpx.a"
+          echo "libvpx $VPX_VERSION built successfully."          
+
       - name: Build libaom for Android ARM64
         shell: bash
         run: |
           set -euo pipefail
+
+          REPO="https://aomedia.googlesource.com/aom"
+
           get_latest_tag() {
-            local repo_url="$1"
-            local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
-              tail -n 1
+            local tags selected
+
+            tags="$(git ls-remote --tags --refs "$REPO")"
+            selected="$(
+              printf '%s\n' "$tags" |
+                awk '{sub(/^refs\/tags\//, "", $2); print $2}' |
+                grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' |
+                sort -V |
+                tail -n 1
+            )"
+
+            if [ -z "$selected" ]; then
+              echo "::error::No stable numeric libaom release tag found." >&2
+              return 1
+            fi
+
+            printf '%s\n' "$selected"
           }
 
-          AOM_VERSION=$(get_latest_tag "https://aomedia.googlesource.com/aom")
-          echo "Latest libaom version: $AOM_VERSION"
+          AOM_VERSION="$(get_latest_tag)"
+          echo "Selected libaom release: $AOM_VERSION"
 
           AOM_SOURCE="$RUNNER_TEMP/libaom"
           AOM_BUILD="$RUNNER_TEMP/libaom-build"
+          rm -rf "$AOM_SOURCE" "$AOM_BUILD"
 
-          git clone --depth 1 --branch "$AOM_VERSION" \
-            https://aomedia.googlesource.com/aom \
-            "$AOM_SOURCE"
+          git clone --depth 1 --branch "$AOM_VERSION" "$REPO" "$AOM_SOURCE"
 
           cmake -S "$AOM_SOURCE" -B "$AOM_BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
@@ -351,12 +384,24 @@ jobs:
             -DCMAKE_C_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
             -DCMAKE_CXX_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
             -DBUILD_SHARED_LIBS=OFF \
-            -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF -DENABLE_TESTDATA=OFF \
-            -DCONFIG_AV1_ENCODER=1 -DCONFIG_AV1_DECODER=1 -DCONFIG_PIC=1 -DCONFIG_RUNTIME_CPU_DETECT=1 -DCONFIG_MULTITHREAD=1 -DAOM_TARGET_CPU=generic
+            -DENABLE_TESTS=OFF \
+            -DENABLE_EXAMPLES=OFF \
+            -DENABLE_TOOLS=OFF \
+            -DENABLE_DOCS=OFF \
+            -DENABLE_TESTDATA=OFF \
+            -DCONFIG_AV1_ENCODER=1 \
+            -DCONFIG_AV1_DECODER=1 \
+            -DCONFIG_PIC=1 \
+            -DCONFIG_RUNTIME_CPU_DETECT=1 \
+            -DCONFIG_MULTITHREAD=1 \
+            -DAOM_TARGET_CPU=generic
 
           cmake --build "$AOM_BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$AOM_BUILD"
 
+          test -s "$DEPS/lib/libaom.a"
+          echo "libaom $AOM_VERSION built successfully."
+          
       - name: Build audio libraries (Opus, Ogg, Vorbis, LAME, TwoLAME, Speex, SoXR)
         shell: bash
         run: |
