@@ -555,7 +555,9 @@ jobs:
             --prefix="$DEPS" \
             --enable-static \
             --disable-shared \
-            --disable-frontend
+            --disable-frontend \
+            --disable-decoder
+  
 
           make -j"$BUILD_JOBS"
           make install
