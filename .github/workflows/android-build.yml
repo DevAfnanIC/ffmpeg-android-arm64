@@ -83,6 +83,29 @@ jobs:
             https://code.videolan.org/videolan/x264.git \
             "$RUNNER_TEMP/x264"
 
+          # Record the exact x264 commit downloaded
+          echo "========== x264 SOURCE VERIFICATION =========="
+          X264_COMMIT="$(git -C "$RUNNER_TEMP/x264" rev-parse HEAD)"
+          git -C "$RUNNER_TEMP/x264" log -1 \
+            --format="Downloaded commit: %H%nCommit date: %cI%nCommit subject: %s"
+          echo "==============================================="
+
+          # Compare with the latest upstream default-branch commit
+          X264_UPSTREAM="$(git ls-remote \
+            https://code.videolan.org/videolan/x264.git HEAD |
+            awk '$2 == "HEAD" {print $1}')"
+
+          echo "Build commit:    $X264_COMMIT"
+          echo "Upstream commit: $X264_UPSTREAM"
+
+          if [ -z "$X264_UPSTREAM" ]; then
+            echo "::warning::Could not retrieve upstream HEAD; comparison inconclusive."
+          elif [ "$X264_COMMIT" = "$X264_UPSTREAM" ]; then
+            echo "RESULT: MATCH - x264 was current with upstream at verification time."
+          else
+            echo "::warning::COMMIT MISMATCH - upstream and build commits differ."
+          fi
+
           CROSS="$RUNNER_TEMP/aarch64-linux-android-"
           for tool in ar ranlib strip nm; do
             test -x "$TOOLCHAIN/bin/llvm-$tool"
@@ -116,7 +139,7 @@ jobs:
 
           make -j"$BUILD_JOBS"
           make install
-
+          
       - name: Build x265 (8-bit, 10-bit and 12-bit)
         shell: bash
         run: |
