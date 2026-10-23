@@ -1017,7 +1017,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
           get_latest_tag() {
@@ -1039,19 +1040,34 @@ jobs:
           git clone --depth 1 --branch "$THEORA_TAG" https://github.com/xiph/theora.git "$SRC"
           cd "$SRC"
 
-          curl -fL --retry 3 "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" -o ./config.sub
-          curl -fL --retry 3 "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess" -o ./config.guess
+          curl -fL --retry 3 \
+            "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub" \
+            -o ./config.sub
+          curl -fL --retry 3 \
+            "https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess" \
+            -o ./config.guess
           chmod +x ./config.sub ./config.guess
+
+          ./autogen.sh
 
           ./configure \
             --build=x86_64-linux-gnu \
             --host=aarch64-linux-android \
             --prefix="$DEPS" \
-            --enable-static --disable-shared --disable-examples --disable-spec --disable-oggtest --disable-vorbistest \
-            CC="$CC" AR="$AR" RANLIB="$RANLIB" CFLAGS="-O2 -fPIC"
+            --enable-static \
+            --disable-shared \
+            --disable-examples \
+            --disable-spec \
+            --disable-oggtest \
+            --disable-vorbistest \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="-O2 -fPIC"
+
           make -j"$BUILD_JOBS"
           make install
-
+          
       - name: Build libass
         shell: bash
         run: |
