@@ -1047,6 +1047,25 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
+          echo "=== Check Android NDK zlib ==="
+
+          find "$SYSROOT/usr/lib" -maxdepth 2 \
+            \( -name 'libz.a' -o -name 'libz.so' \) -print
+
+          echo "=== Check zlib header ==="
+          test -s "$SYSROOT/usr/include/zlib.h" \
+            && echo "Found Android zlib.h" \
+            || echo "Android zlib.h not found"
+
+          echo "=== Check compiler can find zlib ==="
+          printf '#include <zlib.h>\nint main(void) { return zlibVersion() == 0; }\n' \
+            > "$RUNNER_TEMP/check-android-zlib.c"
+
+          "$CC" -c "$RUNNER_TEMP/check-android-zlib.c" \
+            -o "$RUNNER_TEMP/check-android-zlib.o"
+
+          echo "Android zlib header is usable by the cross-compiler."
+
           echo "=== Verify existing dependencies ==="
           test -s "$DEPS/lib/libogg.a"
           test -s "$DEPS/lib/libvorbis.a"
