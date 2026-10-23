@@ -134,12 +134,24 @@ jobs:
               tail -n 1
           }
 
-          X265_VERSION=$(get_latest_tag "https://bitbucket.org/multicoreware/x265_git.git")
-          echo "Latest x265 version: $X265_VERSION"
+          # Use the current x265 GitHub repository.
+          X265_REPO="https://github.com/Multicorewareinc/x265.git"
+
+          X265_VERSION=$(get_latest_tag "$X265_REPO")
+          if [ -z "$X265_VERSION" ]; then
+            echo "ERROR: Could not determine the latest x265 release tag."
+            exit 1
+          fi
+
+          echo "Selected x265 version: $X265_VERSION"
 
           git clone --depth 1 --branch "$X265_VERSION" \
-            https://bitbucket.org/multicoreware/x265_git.git \
-            "$RUNNER_TEMP/x265"
+            "$X265_REPO" "$RUNNER_TEMP/x265"
+
+          # Verify that the checkout matches the selected release tag.
+          CHECKED_OUT_TAG="$(git -C "$RUNNER_TEMP/x265" describe --tags --exact-match)"
+          echo "Checked-out x265 tag: $CHECKED_OUT_TAG"
+          test "$CHECKED_OUT_TAG" = "$X265_VERSION"
 
           X265_SOURCE="$RUNNER_TEMP/x265/source"
           X265_BUILD="$RUNNER_TEMP/x265-build"
@@ -254,7 +266,7 @@ jobs:
           test -s "$DEPS/include/x265_config.h"
           test -s "$DEPS/lib/pkgconfig/x265.pc"
 
-          echo "x265 8-bit, 10-bit and 12-bit build completed successfully."
+          echo "x265 $X265_VERSION 8-bit, 10-bit and 12-bit build completed successfully."
           
       - name: Build libvpx for Android ARM64
         shell: bash
