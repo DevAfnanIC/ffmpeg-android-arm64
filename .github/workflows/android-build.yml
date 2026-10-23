@@ -448,12 +448,7 @@ jobs:
             refresh_config_scripts
 
             if [ "$name" = "twolame" ]; then
-              # Do not run TwoLAME's autogen.sh: it invokes a preliminary
-              # configure with maintainer mode enabled, which requires
-              # asciidoc even though documentation is not needed.
-              #
-              # Regenerate the Autotools files directly, without that
-              # preliminary configure step.
+              # Avoid TwoLAME's preliminary documentation configure step.
               libtoolize --force --copy --automake
               autoreconf -fi
             elif [ -x ./autogen.sh ]; then
@@ -464,10 +459,8 @@ jobs:
               autoreconf -fi
             fi
 
-            # Refresh config scripts after autoreconf/autogen.
             refresh_config_scripts
 
-            # Cross-configure for Android ARM64.
             ./configure \
               --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
               --host=aarch64-linux-android \
@@ -477,9 +470,7 @@ jobs:
               $configure_args
 
             if [ "$name" = "twolame" ]; then
-              # TwoLAME's documentation Makefile expects a generated
-              # twolame.1 file. Build and install the library directly,
-              # skipping the broken documentation and frontend targets.
+              # Skip TwoLAME documentation and frontend targets.
               make -C libtwolame -j"$BUILD_JOBS"
               make -C libtwolame install
             else
@@ -487,7 +478,7 @@ jobs:
               make install
             fi
 
-            echo "Successfully built $name"
+            echo "Successfully built $name from $tag"
           }
 
           # Opus
@@ -508,14 +499,74 @@ jobs:
             https://github.com/xiph/vorbis.git \
             "--disable-examples --disable-oggtest --disable-docs"
 
-          # LAME
-          build_git_autotools \
-            lame \
-            https://github.com/rbrito/lame.git \
-            "--disable-frontend" \
-            '^RELEASE__[0-9_]+$'
+          # LAME — automatically download the latest SourceForge release.
+          # No hardcoded version number or version-specific URL.
+          LAME_ARCHIVE="$RUNNER_TEMP/lame-latest.tar.gz"
+          LAME_EXTRACT="$RUNNER_TEMP/lame-latest-src"
 
-          # Add pkg-config metadata if LAME did not install it.
+          echo "Downloading the latest LAME release from SourceForge..."
+
+          curl -fL --retry 3 \
+            "https://sourceforge.net/projects/lame/files/latest/download" \
+            -o "$LAME_ARCHIVE"
+
+          # Read the archive's top-level directory without stopping tar early.
+          LAME_TOPDIR="$(
+            tar -tzf "$LAME_ARCHIVE" |
+              sed -n '1s,/.*,,p'
+          )"
+
+          if [ -z "$LAME_TOPDIR" ]; then
+            echo "::error::Could not determine LAME source directory from archive."
+            exit 1
+          fi
+
+          LAME_SRC="$LAME_EXTRACT/$LAME_TOPDIR"
+          LAME_VERSION="${LAME_TOPDIR#lame-}"
+
+          echo "Downloaded LAME source directory: $LAME_TOPDIR"
+          echo "Detected LAME version: $LAME_VERSION"
+
+          case "$LAME_TOPDIR" in
+            lame-[0-9]*)
+              ;;
+            *)
+              echo "::error::Unexpected LAME archive directory: $LAME_TOPDIR"
+              exit 1
+              ;;
+          esac
+
+          rm -rf "$LAME_EXTRACT"
+          mkdir -p "$LAME_EXTRACT"
+          tar -xzf "$LAME_ARCHIVE" -C "$LAME_EXTRACT"
+
+          if [ ! -x "$LAME_SRC/configure" ]; then
+            echo "::error::LAME configure script is missing."
+            find "$LAME_EXTRACT" -maxdepth 3 -name configure -print
+            exit 1
+          fi
+
+          cd "$LAME_SRC"
+          refresh_config_scripts
+
+          ./configure \
+            --build="$(./config.guess 2>/dev/null || echo x86_64-pc-linux-gnu)" \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --enable-static \
+            --disable-shared \
+            --disable-frontend
+
+          make -j"$BUILD_JOBS"
+          make install
+
+          if [ ! -s "$DEPS/lib/libmp3lame.a" ]; then
+            echo "::error::LAME static library was not installed."
+            find "$DEPS" -iname '*lame*' -print
+            exit 1
+          fi
+
+          # Supply pkg-config metadata if the release did not install it.
           if ! pkg-config --exists lame; then
             cat > "$DEPS/lib/pkgconfig/lame.pc" <<EOF
           prefix=$DEPS
@@ -523,14 +574,19 @@ jobs:
           libdir=\${prefix}/lib
           includedir=\${prefix}/include
 
-          Name: lame
+          Name: LAME
           Description: LAME MP3 encoder
-          Version: 3.100
+          Version: ${LAME_VERSION}
           Libs: -L\${libdir} -lmp3lame
           Libs.private: -lm
           Cflags: -I\${includedir}
           EOF
           fi
+
+          echo "=== Installed LAME pkg-config version ==="
+          pkg-config --modversion lame
+
+          echo "LAME $LAME_VERSION built and installed successfully."
 
           # TwoLAME
           build_git_autotools \
@@ -544,7 +600,7 @@ jobs:
             https://github.com/xiph/speex.git \
             "--disable-binaries --disable-examples" \
             '^[sS]peex-[0-9]'
-            
+
           # SoXR (CMake)
           SOXR_TAG="$(get_latest_tag "https://github.com/chirlu/soxr.git")"
 
