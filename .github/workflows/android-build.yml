@@ -1090,6 +1090,28 @@ jobs:
             exit 1
           }
 
+          echo "=== Expose Android NDK zlib to pkg-config ==="
+
+          mkdir -p "$DEPS/lib/pkgconfig"
+
+          cat > "$DEPS/lib/pkgconfig/zlib.pc" <<'ZLIB_PC'
+          prefix=
+          exec_prefix=${prefix}
+          libdir=${prefix}
+          includedir=${prefix}
+
+          Name: zlib
+          Description: Android NDK zlib
+          Version: 1.3.1
+          Libs: -lz
+          Cflags:
+          ZLIB_PC
+
+          echo "=== Verify zlib pkg-config metadata ==="
+          pkg-config --modversion zlib
+          pkg-config --cflags zlib
+          pkg-config --libs zlib
+
           echo "=== Download libopenmpt ${VERSION} ==="
           curl -fL --retry 3 --retry-all-errors \
             --connect-timeout 15 --max-time 180 \
