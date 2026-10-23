@@ -1126,6 +1126,20 @@ jobs:
           git clone --depth 1 --branch "$FFMPEG_TAG" https://git.ffmpeg.org/ffmpeg.git "$SRC"
           cd "$SRC"
 
+          echo "=== OpenJPEG pkg-config metadata ==="
+          cat "$DEPS/lib/pkgconfig/libopenjp2.pc"
+
+          echo "=== OpenJPEG detected version ==="
+          pkg-config --modversion libopenjp2
+
+          echo "=== OpenJPEG compiler and linker flags ==="
+          pkg-config --cflags --libs libopenjp2
+
+          echo "=== OpenJPEG header ==="
+          test -f "$DEPS/include/openjpeg-2.5/openjpeg.h" \
+            && echo "OpenJPEG header found" \
+            || echo "OpenJPEG header missing"
+            
           ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
