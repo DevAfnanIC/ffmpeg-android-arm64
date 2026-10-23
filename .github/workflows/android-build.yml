@@ -1285,7 +1285,7 @@ jobs:
             x264 x265 vpx aom dav1d SvtAv1Enc \
             freetype2 fribidi harfbuzz fontconfig libass \
             opus vorbis vorbisenc lame twolame speex soxr \
-            libopenjp2 lc3 theoradec theoraenc; do
+            libopenjp2 lc3 theoradec theoraenc libopenmpt; do
             if pkg-config --exists "$package"; then
               printf 'FOUND: %s (%s)\n' \
                 "$package" "$(pkg-config --modversion "$package")"
