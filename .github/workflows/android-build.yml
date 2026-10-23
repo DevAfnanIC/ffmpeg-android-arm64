@@ -1021,6 +1021,94 @@ jobs:
           test -s "$DEPS/include/lc3.h"
 
           echo "LC3 built successfully"
+
+      - name: Build libopenmpt
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION="0.8.9"
+          SRC="$RUNNER_TEMP/libopenmpt"
+          ARCHIVE="$RUNNER_TEMP/libopenmpt-${VERSION}.tar.gz"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export CC="$CC"
+          export CXX="$CXX"
+          export AR="$AR"
+          export RANLIB="$RANLIB"
+          export STRIP="$STRIP"
+
+          export CFLAGS="-O2 -fPIC"
+          export CXXFLAGS="-O2 -fPIC -std=c++17"
+          export CPPFLAGS="-I$DEPS/include"
+          export LDFLAGS="-L$DEPS/lib"
+
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          echo "=== Verify existing dependencies ==="
+          test -s "$DEPS/lib/libogg.a"
+          test -s "$DEPS/lib/libvorbis.a"
+          test -s "$DEPS/lib/libvorbisfile.a" || {
+            echo "ERROR: libvorbisfile.a is missing."
+            echo "The current Vorbis step verifies libvorbisenc.a, not libvorbisfile.a."
+            exit 1
+          }
+
+          echo "=== Download libopenmpt ${VERSION} ==="
+          curl -fL --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 180 \
+            "https://lib.openmpt.org/files/libopenmpt/src/libopenmpt-${VERSION}+release.autotools.tar.gz" \
+            -o "$ARCHIVE"
+
+          echo "=== Extract source ==="
+          rm -rf "$SRC"
+          mkdir -p "$SRC"
+          tar -xzf "$ARCHIVE" --strip-components=1 -C "$SRC"
+          cd "$SRC"
+
+          test -x ./configure
+
+          echo "=== Configure libopenmpt for Android ARM64 ==="
+          ./configure \
+            --build=x86_64-pc-linux-gnu \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --enable-static \
+            --disable-shared \
+            --disable-openmpt123 \
+            CC="$CC" \
+            CXX="$CXX" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            STRIP="$STRIP" \
+            CFLAGS="$CFLAGS" \
+            CXXFLAGS="$CXXFLAGS" \
+            CPPFLAGS="$CPPFLAGS" \
+            LDFLAGS="$LDFLAGS"
+
+          echo "=== Build libopenmpt ==="
+          make -j"$BUILD_JOBS"
+
+          echo "=== Install libopenmpt ==="
+          make install
+
+          echo "=== Verify installed artifacts ==="
+          find "$DEPS/lib" -maxdepth 2 \
+            \( -iname '*openmpt*.a' -o -iname '*openmpt*.pc' \) \
+            -print
+
+          test -s "$DEPS/lib/libopenmpt.a"
+          test -s "$DEPS/lib/pkgconfig/libopenmpt.pc"
+          test -s "$DEPS/include/libopenmpt/libopenmpt.h"
+
+          echo "=== Verify pkg-config metadata ==="
+          pkg-config --modversion libopenmpt
+          pkg-config --cflags libopenmpt
+          pkg-config --static --libs libopenmpt
+
+          echo "libopenmpt build and installation completed."
           
       - name: Build Theora
         shell: bash
@@ -1272,6 +1360,7 @@ jobs:
             --enable-libwebp \
             --enable-libopenjpeg \
             --enable-liblc3 \
+            --enable-libopenmpt \
             --enable-libtheora \
             --enable-libopus \
             --enable-libvorbis \
@@ -1284,7 +1373,7 @@ jobs:
           for feature in \
             LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
             LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
-            LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA \
+            LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA LIBOPENMPT \
             LIBOPUS LIBVORBIS LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR; do
             if grep -q "^#define CONFIG_${feature} 1$" config.h; then
               echo "ENABLED: $feature"
