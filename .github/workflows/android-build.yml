@@ -950,37 +950,101 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rc=$?; echo "::error::OpenJPEG build failed at line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
+
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
           get_latest_tag() {
             local repo_url="$1"
             local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
+
+            git ls-remote --tags --sort='v:refname' "$repo_url" |
+              awk -F/ '{print $3}' |
+              sed 's/\^{}//' |
+              grep -E "$grep_pattern" |
+              grep -vE 'rc|beta|alpha|dev|patch|pre' |
+              sort -Vu |
               tail -n 1
           }
 
-          OPJ_TAG=$(get_latest_tag "https://github.com/uclouvain/openjpeg.git")
+          OPJ_TAG="$(get_latest_tag "https://github.com/uclouvain/openjpeg.git")"
+          if [ -z "$OPJ_TAG" ]; then
+            echo "::error::Could not find an OpenJPEG release tag."
+            exit 1
+          fi
           echo "Latest OpenJPEG version: $OPJ_TAG"
 
           SRC="$RUNNER_TEMP/openjpeg"
           BUILD="$RUNNER_TEMP/openjpeg-build"
 
-          git clone --depth 1 --branch "$OPJ_TAG" https://github.com/uclouvain/openjpeg.git "$SRC"
+          rm -rf "$SRC" "$BUILD"
+
+          git clone --depth 1 --branch "$OPJ_TAG" \
+            https://github.com/uclouvain/openjpeg.git "$SRC"
+
           cmake -S "$SRC" -B "$BUILD" \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=24 \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_CODEC=OFF -DBUILD_TESTING=OFF -DBUILD_DOC=OFF -DBUILD_JPIP=OFF -DBUILD_MJ2=OFF -DWITH_TIFF=OFF -DWITH_PNG=OFF -DWITH_OPENGL=OFF
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_CODEC=OFF \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_DOC=OFF \
+            -DBUILD_JPIP=OFF \
+            -DBUILD_MJ2=OFF \
+            -DWITH_TIFF=OFF \
+            -DWITH_PNG=OFF \
+            -DWITH_OPENGL=OFF
+
           cmake --build "$BUILD" --parallel "$BUILD_JOBS"
           cmake --install "$BUILD"
 
+          PC_FILE="$DEPS/lib/pkgconfig/libopenjp2.pc"
+
+          if [ ! -s "$DEPS/lib/libopenjp2.a" ]; then
+            echo "::error::OpenJPEG static library was not installed."
+            find "$DEPS" -iname '*openjp*' -print
+            exit 1
+          fi
+
+          if [ ! -s "$PC_FILE" ]; then
+            echo "::error::OpenJPEG pkg-config file was not installed: $PC_FILE"
+            find "$DEPS" -name '*.pc' -print
+            exit 1
+          fi
+
+          # Correct the unusual pthread linker flag if OpenJPEG emitted it.
+          # pkg-config's conventional flag for pthread is -pthread.
+          if grep -q -- '-l-pthread' "$PC_FILE"; then
+            echo "Correcting OpenJPEG Libs.private pthread flag."
+            sed -i 's/-l-pthread/-pthread/g' "$PC_FILE"
+          fi
+
+          echo "=== OpenJPEG pkg-config metadata ==="
+          cat "$PC_FILE"
+
+          echo "=== OpenJPEG version ==="
+          pkg-config --modversion libopenjp2
+
+          echo "=== OpenJPEG normal flags ==="
+          pkg-config --cflags --libs libopenjp2
+
+          echo "=== OpenJPEG static flags ==="
+          pkg-config --static --cflags --libs libopenjp2
+
+          echo "=== Verify OpenJPEG headers ==="
+          test -s "$DEPS/include/openjpeg-2.5/openjpeg.h"
+          echo "OpenJPEG headers found."
+
+          echo "OpenJPEG $OPJ_TAG built and installed successfully."
+          
       - name: Build LC3
         shell: bash
         run: |
@@ -1103,63 +1167,137 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          trap 'rc=$?; echo "::error::FFmpeg build failed at line $LINENO (exit $rc): $BASH_COMMAND" >&2' ERR
+
           export PATH="$TOOLCHAIN/bin:$PATH"
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig" PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
           get_latest_tag() {
             local repo_url="$1"
             local grep_pattern="${2:-^[vV]?[0-9]}"
-            git ls-remote --tags --sort='v:refname' "$repo_url" | \
-              awk -F/ '{print $3}' | \
-              sed 's/\^{}//' | \
-              grep -E "$grep_pattern" | \
-              grep -vE 'rc|beta|alpha|dev|patch|pre' | \
-              sort -Vu | \
+
+            git ls-remote --tags --sort='v:refname' "$repo_url" |
+              awk -F/ '{print $3}' |
+              sed 's/\^{}//' |
+              grep -E "$grep_pattern" |
+              grep -vE 'rc|beta|alpha|dev|patch|pre' |
+              sort -Vu |
               tail -n 1
           }
 
-          FFMPEG_TAG=$(get_latest_tag "https://git.ffmpeg.org/ffmpeg.git" "^n[0-9.]+$")
+          FFMPEG_TAG="$(get_latest_tag "https://git.ffmpeg.org/ffmpeg.git" "^n[0-9.]+$")"
+
+          if [ -z "$FFMPEG_TAG" ]; then
+            echo "::error::Could not find an FFmpeg release tag."
+            exit 1
+          fi
+
           echo "Latest FFmpeg version: $FFMPEG_TAG"
 
           SRC="$RUNNER_TEMP/ffmpeg"
-          git clone --depth 1 --branch "$FFMPEG_TAG" https://git.ffmpeg.org/ffmpeg.git "$SRC"
+          rm -rf "$SRC"
+
+          git clone --depth 1 --branch "$FFMPEG_TAG" \
+            https://git.ffmpeg.org/ffmpeg.git "$SRC"
+
           cd "$SRC"
 
-          echo "=== OpenJPEG pkg-config metadata ==="
+          echo "=== OpenJPEG library and metadata ==="
+          ls -l "$DEPS/lib/libopenjp2.a"
           cat "$DEPS/lib/pkgconfig/libopenjp2.pc"
 
-          echo "=== OpenJPEG detected version ==="
+          echo "=== pkg-config executable ==="
+          command -v pkg-config
+          pkg-config --version
+
+          echo "=== OpenJPEG version ==="
           pkg-config --modversion libopenjp2
 
-          echo "=== OpenJPEG compiler and linker flags ==="
+          echo "=== OpenJPEG normal flags ==="
           pkg-config --cflags --libs libopenjp2
 
-          echo "=== OpenJPEG header ==="
-          test -f "$DEPS/include/openjpeg-2.5/openjpeg.h" \
-            && echo "OpenJPEG header found" \
-            || echo "OpenJPEG header missing"
-            
-          ./configure \
+          echo "=== OpenJPEG static flags (used by FFmpeg) ==="
+          pkg-config --static --cflags --libs libopenjp2
+
+          echo "=== OpenJPEG headers ==="
+          test -s "$DEPS/include/openjpeg-2.5/openjpeg.h"
+          echo "OpenJPEG header found."
+
+          echo "=== Configure FFmpeg ==="
+
+          if ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
             --arch=aarch64 \
             --enable-cross-compile \
             --sysroot="$SYSROOT" \
-            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --strip="$STRIP" \
-            --pkg-config=pkg-config --pkg-config-flags=--static \
+            --cc="$CC" \
+            --cxx="$CXX" \
+            --ar="$AR" \
+            --ranlib="$RANLIB" \
+            --strip="$STRIP" \
+            --pkg-config=pkg-config \
+            --pkg-config-flags=--static \
             --extra-cflags="-I$DEPS/include -fPIC" \
             --extra-ldflags="-L$DEPS/lib" \
             --extra-libs="-lm" \
-            --enable-static --disable-shared --enable-pic --enable-gpl \
-            --enable-libx264 --enable-libx265 --enable-libvpx --enable-libaom --enable-libdav1d --enable-libsvtav1 \
-            --enable-libfreetype --enable-libfontconfig --enable-libfribidi --enable-libharfbuzz --enable-libass \
-            --enable-libwebp --enable-libopenjpeg --enable-liblc3 --enable-libtheora \
-            --enable-libopus --enable-libvorbis --enable-libmp3lame --enable-libtwolame --enable-libspeex --enable-libsoxr
+            --enable-static \
+            --disable-shared \
+            --enable-pic \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-libx265 \
+            --enable-libvpx \
+            --enable-libaom \
+            --enable-libdav1d \
+            --enable-libsvtav1 \
+            --enable-libfreetype \
+            --enable-libfontconfig \
+            --enable-libfribidi \
+            --enable-libharfbuzz \
+            --enable-libass \
+            --enable-libwebp \
+            --enable-libopenjpeg \
+            --enable-liblc3 \
+            --enable-libtheora \
+            --enable-libopus \
+            --enable-libvorbis \
+            --enable-libmp3lame \
+            --enable-libtwolame \
+            --enable-libspeex \
+            --enable-libsoxr
+          then
+            echo "FFmpeg configure completed successfully."
+          else
+            rc=$?
+            echo "::error::FFmpeg configure failed with exit code $rc."
 
+            echo "=== OpenJPEG-related configure log lines ==="
+            if [ -f ffbuild/config.log ]; then
+              grep -n -i -A15 -B15 \
+                -E 'openjp2|openjpeg|opj_version|ERROR:' \
+                ffbuild/config.log || true
+            else
+              echo "ffbuild/config.log was not created."
+            fi
+
+            echo "=== OpenJPEG static metadata at failure ==="
+            cat "$DEPS/lib/pkgconfig/libopenjp2.pc" || true
+
+            exit "$rc"
+          fi
+
+          echo "=== Build FFmpeg ==="
           make -j"$BUILD_JOBS"
+
+          echo "=== Install FFmpeg ==="
           make install
 
+          test -x "$PREFIX/bin/ffmpeg"
+          echo "FFmpeg built and installed: $PREFIX/bin/ffmpeg"
+          
       - name: Package Android ARM64 build
         shell: bash
         run: |
