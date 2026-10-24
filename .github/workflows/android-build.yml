@@ -1143,6 +1143,7 @@ jobs:
             --enable-static \
             --disable-shared \
             --disable-openmpt123 \
+            --disable-examples \
             --without-mpg123 \
             CC="$CC" \
             CXX="$CXX" \
