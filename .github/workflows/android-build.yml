@@ -1333,6 +1333,99 @@ jobs:
           pkg-config --modversion libass
 
           echo "libass built successfully"
+
+      - name: Build OpenCORE-AMR
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION=0.1.6
+          cd "$RUNNER_TEMP"
+
+          curl -fL \
+            "https://downloads.sourceforge.net/opencore-amr/opencore-amr-${VERSION}.tar.gz" \
+            -o opencore-amr.tar.gz
+
+          tar -xzf opencore-amr.tar.gz
+          cd "opencore-amr-${VERSION}"
+
+          ./configure \
+            --build=x86_64-pc-linux-gnu \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --enable-static \
+            --disable-shared \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="$CFLAGS" \
+            CPPFLAGS="$CPPFLAGS" \
+            LDFLAGS="$LDFLAGS"
+
+          make -j"$BUILD_JOBS"
+          make install
+
+          test -f "$DEPS/lib/libopencore-amrnb.a"
+          test -f "$DEPS/lib/libopencore-amrwb.a"
+          echo "OpenCORE-AMR built successfully"
+
+      - name: Build vo-amrwbenc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          VERSION=0.1.3
+          cd "$RUNNER_TEMP"
+
+          curl -fL \
+            "https://downloads.sourceforge.net/opencore-amr/vo-amrwbenc-${VERSION}.tar.gz" \
+            -o vo-amrwbenc.tar.gz
+
+          tar -xzf vo-amrwbenc.tar.gz
+          cd "vo-amrwbenc-${VERSION}"
+
+          ./configure \
+            --build=x86_64-pc-linux-gnu \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --enable-static \
+            --disable-shared \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="$CFLAGS" \
+            CPPFLAGS="$CPPFLAGS" \
+            LDFLAGS="$LDFLAGS"
+
+          make -j"$BUILD_JOBS"
+          make install
+
+          test -f "$DEPS/lib/libvo-amrwbenc.a"
+          test -f "$DEPS/lib/pkgconfig/vo-amrwbenc.pc"
+          echo "vo-amrwbenc built successfully"
+
+      - name: Build GSM
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/timothytylee/libgsm.git gsm-src
+          cd gsm-src
+
+          # Build the library only; do not run target binaries on the host.
+          make -j"$BUILD_JOBS" \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="$CFLAGS -DNeedFunctionPrototypes"
+
+          install -d "$DEPS/lib" "$DEPS/include/gsm"
+          install -m 644 lib/libgsm.a "$DEPS/lib/libgsm.a"
+          install -m 644 inc/gsm.h "$DEPS/include/gsm.h"
+
+          test -f "$DEPS/lib/libgsm.a"
+          echo "GSM built successfully"
           
       - name: Configure FFmpeg
         shell: bash
@@ -1434,7 +1527,11 @@ jobs:
             --enable-libmp3lame \
             --enable-libtwolame \
             --enable-libspeex \
-            --enable-libsoxr
+            --enable-libsoxr \
+            --enable-libopencore-amrnb \
+            --enable-libopencore-amrwb \
+            --enable-libvo-amrwbenc \
+            --enable-libgsm
 
           echo "=== Verify selected FFmpeg features ==="
           for feature in \
