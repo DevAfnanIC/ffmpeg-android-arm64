@@ -1468,6 +1468,87 @@ jobs:
           "$AR" t "$DEPS/lib/libgsm.a"
 
           echo "GSM static library built successfully"
+
+      - name: Build iLBC
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/TimothyGu/libilbc.git ilbc-src
+          cd ilbc-src
+
+          cmake -S . -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DBUILD_SHARED_LIBS=OFF
+
+          cmake --build build-android --parallel "$BUILD_JOBS"
+          cmake --install build-android
+
+          find "$DEPS/lib" -maxdepth 1 -name '*ilbc*.a' -print -quit |
+            grep -q .
+          echo "iLBC built successfully"
+
+      - name: Build Codec2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/drowe67/codec2.git codec2-src
+          cd codec2-src
+
+          cmake -S . -B build-android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DUNITTEST=OFF \
+            -DLPCNET=OFF
+
+          cmake --build build-android --parallel "$BUILD_JOBS"
+          cmake --install build-android
+
+          test -f "$DEPS/lib/libcodec2.a"
+          test -f "$DEPS/include/codec2/codec2.h"
+          echo "Codec2 built successfully"
+
+      - name: Build FDK-AAC
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RUNNER_TEMP"
+          git clone --depth 1 https://github.com/mstorsjo/fdk-aac.git fdk-aac-src
+          cd fdk-aac-src
+
+          autoreconf -fiv
+
+          ./configure \
+            --build=x86_64-pc-linux-gnu \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --enable-static \
+            --disable-shared \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            CFLAGS="${CFLAGS:-}" \
+            CPPFLAGS="${CPPFLAGS:-}" \
+            LDFLAGS="${LDFLAGS:-}"
+
+          make -j"$BUILD_JOBS"
+          make install
+
+          test -f "$DEPS/lib/libfdk-aac.a"
+          test -f "$DEPS/include/fdk-aac/aacenc_lib.h"
+          echo "FDK-AAC built successfully"
           
       - name: Configure FFmpeg
         shell: bash
@@ -1534,6 +1615,7 @@ jobs:
             --arch=aarch64 \
             --enable-cross-compile \
             --enable-version3 \
+            --enable-nonfree \
             --sysroot="$SYSROOT" \
             --cc="$CC" \
             --cxx="$CXX" \
@@ -1574,7 +1656,10 @@ jobs:
             --enable-libopencore-amrnb \
             --enable-libopencore-amrwb \
             --enable-libvo-amrwbenc \
-            --enable-libgsm
+            --enable-libgsm \
+            --enable-libilbc \
+           --enable-libcodec2 \
+           --enable-libfdk-aac
 
           echo "=== Verify selected FFmpeg features ==="
           for feature in \
