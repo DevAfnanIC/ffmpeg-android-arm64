@@ -15,6 +15,9 @@ jobs:
       ANDROID_API: "24"
       FFMPEG_VERSION: "9.0.2"
       BUILD_JOBS: "2"
+      CFLAGS: ""
+      CPPFLAGS: ""
+      LDFLAGS: ""
 
     steps:
       - name: Check out repository
@@ -1358,9 +1361,9 @@ jobs:
             CC="$CC" \
             AR="$AR" \
             RANLIB="$RANLIB" \
-            CFLAGS="${CFLAGS:-}" \
-            CPPFLAGS="${CPPFLAGS:-}" \
-            LDFLAGS="${LDFLAGS:-}"
+            CFLAGS="$CFLAGS" \
+            CPPFLAGS="$CPPFLAGS" \
+            LDFLAGS="$LDFLAGS"
 
           make -j"$BUILD_JOBS"
           make install
