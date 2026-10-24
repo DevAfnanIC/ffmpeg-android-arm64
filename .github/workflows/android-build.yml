@@ -1416,14 +1416,21 @@ jobs:
           git clone --depth 1 https://github.com/timothytylee/libgsm.git gsm-src
           cd gsm-src
 
-          # Build the library only; do not run target binaries on the host.
+          # Confirm the required upstream headers exist.
+          test -f inc/config.h
+          test -f inc/private.h
+          test -f inc/gsm.h
+
+          # Compile for Android ARM64 and include the GSM headers.
           make -j"$BUILD_JOBS" \
             CC="$CC" \
             AR="$AR" \
             RANLIB="$RANLIB" \
-            CFLAGS="$CFLAGS -DNeedFunctionPrototypes"
+            CCFLAGS="${CFLAGS:-} -DNeedFunctionPrototypes -I$PWD/inc" \
+            CCINC="-I$PWD/inc"
 
-          install -d "$DEPS/lib" "$DEPS/include/gsm"
+          # Install the static library and public header.
+          install -d "$DEPS/lib" "$DEPS/include"
           install -m 644 lib/libgsm.a "$DEPS/lib/libgsm.a"
           install -m 644 inc/gsm.h "$DEPS/include/gsm.h"
 
