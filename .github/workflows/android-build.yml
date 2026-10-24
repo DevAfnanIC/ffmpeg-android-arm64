@@ -1416,26 +1416,58 @@ jobs:
           git clone --depth 1 https://github.com/timothytylee/libgsm.git gsm-src
           cd gsm-src
 
-          # Confirm the required upstream headers exist.
-          test -f inc/config.h
-          test -f inc/private.h
-          test -f inc/gsm.h
+          mkdir -p build-objects "$DEPS/lib" "$DEPS/include"
 
-          # Compile for Android ARM64 and include the GSM headers.
-          make -j"$BUILD_JOBS" \
-            CC="$CC" \
-            AR="$AR" \
-            RANLIB="$RANLIB" \
-            CCFLAGS="${CFLAGS:-} -DNeedFunctionPrototypes -I$PWD/inc" \
-            CCINC="-I$PWD/inc"
+          # Compile only library sources; do not build host utilities.
+          SOURCES=(
+            add
+            code
+            debug
+            decode
+            long_term
+            lpc
+            preprocess
+            rpe
+            gsm_destroy
+            gsm_decode
+            gsm_encode
+            gsm_explode
+            gsm_implode
+            gsm_create
+            gsm_print
+            gsm_option
+            short_term
+            table
+          )
 
-          # Install the static library and public header.
-          install -d "$DEPS/lib" "$DEPS/include"
-          install -m 644 lib/libgsm.a "$DEPS/lib/libgsm.a"
+          OBJECTS=()
+
+          for src in "${SOURCES[@]}"; do
+            echo "Compiling $src.c"
+            "$CC" \
+              -c \
+              -O2 \
+              -DNeedFunctionPrototypes \
+              -DSASR \
+              -DWAV49 \
+              -Wno-comment \
+              -I"$PWD/inc" \
+              "src/$src.c" \
+              -o "build-objects/$src.o"
+
+            OBJECTS+=("build-objects/$src.o")
+          done
+
+          # Create the Android ARM64 static archive.
+          "$AR" rcs "$DEPS/lib/libgsm.a" "${OBJECTS[@]}"
+          "$RANLIB" "$DEPS/lib/libgsm.a"
+
           install -m 644 inc/gsm.h "$DEPS/include/gsm.h"
 
-          test -f "$DEPS/lib/libgsm.a"
-          echo "GSM built successfully"
+          test -s "$DEPS/lib/libgsm.a"
+          "$AR" t "$DEPS/lib/libgsm.a"
+
+          echo "GSM static library built successfully"
           
       - name: Configure FFmpeg
         shell: bash
