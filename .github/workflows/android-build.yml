@@ -1358,9 +1358,9 @@ jobs:
             CC="$CC" \
             AR="$AR" \
             RANLIB="$RANLIB" \
-            CFLAGS="$CFLAGS" \
-            CPPFLAGS="$CPPFLAGS" \
-            LDFLAGS="$LDFLAGS"
+            CFLAGS="${CFLAGS:-}" \
+            CPPFLAGS="${CPPFLAGS:-}" \
+            LDFLAGS="${LDFLAGS:-}"
 
           make -j"$BUILD_JOBS"
           make install
