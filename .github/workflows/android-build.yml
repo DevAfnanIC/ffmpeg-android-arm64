@@ -1533,6 +1533,7 @@ jobs:
             --target-os=android \
             --arch=aarch64 \
             --enable-cross-compile \
+            --enable-version3 \
             --sysroot="$SYSROOT" \
             --cc="$CC" \
             --cxx="$CXX" \
