@@ -1125,7 +1125,11 @@ jobs:
           cd "$SRC"
 
           test -x ./configure
+          echo "=== libopenmpt mpg123 configure options ==="
+          ./configure --help | grep -i -C 3 'mpg123\|mo3' || true
 
+          echo "=== mpg123 checks and option handling ==="
+          grep -n -i -C 5 'mpg123\|mo3' configure.ac configure 2>/dev/null | head -200 || true
           echo "=== Configure libopenmpt for Android ARM64 ==="
           ./configure \
             --build=x86_64-pc-linux-gnu \
