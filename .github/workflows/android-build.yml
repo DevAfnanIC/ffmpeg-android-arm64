@@ -1794,29 +1794,85 @@ jobs:
           test -f "$DEPS/include/libxml2/libxml/parser.h"
           test -s "$DEPS/lib/libxml2.a"
 
-          echo "libxml2 static library built successfully."
-          
-      - name: Prepare libbluray Android ARM64 build
+          echo "libxml2 static library built successfully."         
+
+      - name: Build libbluray
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking libbluray build dependencies..."
+          SRC="$RUNNER_TEMP/libbluray-src"
+          BUILD="$RUNNER_TEMP/libbluray-build"
 
-          if ! test -f "$DEPS/include/libxml2/libxml/parser.h"; then
-            echo "::error::libbluray requires libxml2 headers. Add a static Android ARM64 libxml2 build before libbluray."
-            exit 1
-          fi
+          # Fetch libbluray with its bundled libudfread dependency.
+          git clone --depth 1 \
+            https://code.videolan.org/videolan/libbluray.git "$SRC"
 
-          if ! find "$DEPS/lib" -maxdepth 1 \
-              \( -name 'libxml2.a' -o -name 'libxml2.so' \) \
-              -print -quit | grep -q .; then
-            echo "::error::libxml2 library was not found in DEPS/lib."
-            exit 1
-          fi
+          cd "$SRC"
+          git submodule update --init --recursive
 
-          echo "libxml2 dependency is present."
+          # Ensure the Android dependency prefix is discoverable.
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
 
+          test -f "$DEPS/include/libxml2/libxml/parser.h"
+          test -s "$DEPS/lib/libxml2.a"
+
+          # Use a Meson cross file for the Android ARM64 toolchain.
+          cat > "$RUNNER_TEMP/android-arm64-meson.ini" <<EOF
+          [binaries]
+          c = '$CC'
+          cpp = '$CXX'
+          ar = '$AR'
+          strip = '$STRIP'
+          pkg-config = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+          sys_root = '$SYSROOT'
+
+          [built-in options]
+          c_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-I$DEPS/include/libxml2', '-fPIC']
+          c_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          cpp_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-I$DEPS/include/libxml2', '-fPIC']
+          cpp_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          EOF
+
+          # Install Meson/Ninja if not already available.
+          python3 -m pip install --user meson ninja
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # Disable optional BD-J Java support and build a static archive.
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$RUNNER_TEMP/android-arm64-meson.ini" \
+            --prefix="$DEPS" \
+            --libdir=lib \
+            --default-library=static \
+            --buildtype=release \
+            -Dbdjava=disabled \
+            -Dtests=false \
+            -Dexamples=false \
+            -Dfreetype=enabled \
+            -Dfontconfig=enabled \
+            -Dlibxml2=enabled
+
+          meson compile -C "$BUILD" -j "$BUILD_JOBS"
+          meson install -C "$BUILD"
+
+          # Verify the actual installed library and headers.
+          test -s "$DEPS/lib/libbluray.a"
+          test -f "$DEPS/include/libbluray/bluray.h"
+
+          echo "libbluray static library built successfully."
+          ls -lh "$DEPS/lib/libbluray.a"
+          
       - name: Configure FFmpeg
         shell: bash
         run: |
@@ -1927,7 +1983,7 @@ jobs:
             --enable-libgsm \
             --enable-libilbc \
             --enable-libcodec2 \
-            --enable-libfdk-aac \ 
+            --enable-libfdk-aac \
             --enable-libxvid \
             --enable-librtmp \
             --enable-libbluray
@@ -1939,7 +1995,7 @@ jobs:
             LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
             LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA LIBOPENMPT \
             LIBOPUS LIBVORBIS LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR \
-            LIBCODEC2 LIBFDK_AAC; do
+            LIBCODEC2 LIBFDK_AAC LIBXVID LIBRTMP LIBBLURAY; do
             if grep -q "^#define CONFIG_${feature} 1$" config.h; then
               echo "ENABLED: $feature"
             else
