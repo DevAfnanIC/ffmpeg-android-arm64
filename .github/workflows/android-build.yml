@@ -1850,19 +1850,18 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
 
           # Disable optional BD-J Java support and build a static archive.
+
           meson setup "$BUILD" "$SRC" \
             --cross-file "$RUNNER_TEMP/android-arm64-meson.ini" \
             --prefix="$DEPS" \
             --libdir=lib \
             --default-library=static \
             --buildtype=release \
-            -Dbdjava=disabled \
-            -Dtests=false \
-            -Dexamples=false \
+            -Dbdj_jar=disabled \
             -Dfreetype=enabled \
             -Dfontconfig=enabled \
             -Dlibxml2=enabled
-
+            
           meson compile -C "$BUILD" -j "$BUILD_JOBS"
           meson install -C "$BUILD"
 
