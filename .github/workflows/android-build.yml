@@ -1500,13 +1500,15 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "=== Clone Codec2 ==="
           cd "$RUNNER_TEMP"
+          rm -rf codec2-src
           git clone --depth 1 https://github.com/drowe67/codec2.git codec2-src
           cd codec2-src
 
-          # Build generate_codebook natively for the Linux x86-64 runner.
-          # The workflow's global CC/CXX point to the Android cross-compiler,
-          # so explicitly unset them for this configuration.
+          echo "=== Build host-native codebook generator ==="
+          # The generator must run on the GitHub Actions Linux host,
+          # not on the Android ARM64 target.
           env -u CC -u CXX -u AR -u RANLIB cmake \
             -S . -B build-host \
             -DCMAKE_BUILD_TYPE=Release \
@@ -1519,30 +1521,43 @@ jobs:
 
           HOST_GENERATOR="$RUNNER_TEMP/codec2-src/build-host/src/generate_codebook"
 
-          test -x "$HOST_GENERATOR"
-          file "$HOST_GENERATOR" | tee "$RUNNER_TEMP/codec2-host-generator.txt"
-          grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt"
+          if [ ! -x "$HOST_GENERATOR" ]; then
+            echo "ERROR: Host generate_codebook executable was not created" >&2
+            find build-host -name generate_codebook -type f -print
+            exit 1
+          fi
 
-          # Patch Codec2 to use the native generator while cross-compiling.
+          file "$HOST_GENERATOR" | tee "$RUNNER_TEMP/codec2-host-generator.txt"
+
+          if ! grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt"; then
+            echo "ERROR: generate_codebook does not appear to be a host x86-64 executable" >&2
+            exit 1
+          fi
+
+          echo "=== Prepare Codec2 cross-compilation ==="
+          # Rename the symbols that conflict with Speex.
+          # Apply these flags globally so both the library and Codec2's
+          # internal tools use the same symbol names.
+          CODEC2_SYMBOL_FLAGS="-Dlpc_to_lsp=codec2_lpc_to_lsp -Dlsp_to_lpc=codec2_lsp_to_lpc"
+
+          # Replace the upstream codebook-generator block with an imported
+          # host executable when cross-compiling.
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path("src/CMakeLists.txt")
           source = path.read_text()
 
-          start_marker = "if(CMAKE_CROSSCOMPILING)"
-          end_marker = "endif(CMAKE_CROSSCOMPILING)"
+          old = """if(CMAKE_CROSSCOMPILING)
+              include(${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
+          else(CMAKE_CROSSCOMPILING)
+              add_executable(generate_codebook generate_codebook.c)
+              target_link_libraries(generate_codebook m)
+              export(TARGETS generate_codebook
+                  FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
+          endif(CMAKE_CROSSCOMPILING)"""
 
-          start = source.find(start_marker)
-          if start < 0:
-              raise SystemExit("Could not find CMAKE_CROSSCOMPILING block")
-
-          end = source.find(end_marker, start)
-          if end < 0:
-              raise SystemExit("Could not find end of CMAKE_CROSSCOMPILING block")
-          end += len(end_marker)
-
-          replacement = '''if(CMAKE_CROSSCOMPILING)
+          new = """if(CMAKE_CROSSCOMPILING)
               if(NOT DEFINED GENERATE_CODEBOOK OR NOT EXISTS "${GENERATE_CODEBOOK}")
                   message(FATAL_ERROR "GENERATE_CODEBOOK must point to a runnable host executable")
               endif()
@@ -1554,78 +1569,68 @@ jobs:
               target_link_libraries(generate_codebook m)
               export(TARGETS generate_codebook
                   FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
-          endif(CMAKE_CROSSCOMPILING)'''
+          endif(CMAKE_CROSSCOMPILING)"""
 
-          source = source[:start] + replacement + source[end:]
+          if old not in source:
+              print("Could not find the expected generate_codebook CMake block.")
+              print("Inspect src/CMakeLists.txt and update the patch for this revision.")
+              raise SystemExit(1)
 
-          # Rename Codec2's conflicting symbols so they do not collide with Speex.
-          marker = "add_library(codec2"
-          start = source.find(marker)
-          if start < 0:
-              raise SystemExit("Could not find add_library(codec2 ...)")
-
-          # Find the end of the add_library command, accounting for nested parentheses.
-          opening = source.find("(", start)
-          if opening < 0:
-              raise SystemExit("Could not find opening parenthesis for add_library(codec2)")
-
-          depth = 0
-          end = None
-          for i in range(opening, len(source)):
-              if source[i] == "(":
-                  depth += 1
-              elif source[i] == ")":
-                  depth -= 1
-                  if depth == 0:
-                      end = i + 1
-                      break
-
-          if end is None:
-              raise SystemExit("Could not find end of add_library(codec2 ...)")
-
-          definitions = '''
-
-          # Keep these symbol names private to Codec2 to avoid conflicts with Speex.
-          target_compile_definitions(codec2 PRIVATE
-              lpc_to_lsp=codec2_lpc_to_lsp
-              lsp_to_lpc=codec2_lsp_to_lpc
-          )
-          '''
-
-          if "target_compile_definitions(codec2 PRIVATE" in source:
-              raise SystemExit("Codec2 symbol-renaming definitions already exist")
-
-          source = source[:end] + definitions + source[end:]
+          source = source.replace(old, new, 1)
           path.write_text(source)
-          print("Patched Codec2 cross-compilation rule and renamed conflicting symbols")
+          print("Patched src/CMakeLists.txt to use the host-native generator.")
           PY
 
-          # Cross-compile the actual Codec2 library for Android ARM64, API 24.
+          echo "=== Configure Codec2 for Android ARM64 ==="
           cmake -S . -B build-android \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=24 \
+            -DANDROID_PLATFORM="$ANDROID_API" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DBUILD_SHARED_LIBS=OFF \
             -DUNITTEST=OFF \
             -DLPCNET=OFF \
-            -DGENERATE_CODEBOOK="$HOST_GENERATOR"
+            -DGENERATE_CODEBOOK="$HOST_GENERATOR" \
+            -DCMAKE_C_FLAGS="$CODEC2_SYMBOL_FLAGS"
 
+          echo "=== Build Codec2 ==="
           cmake --build build-android --parallel "$BUILD_JOBS"
+
+          echo "=== Install Codec2 ==="
           cmake --install build-android
 
-          test -f "$DEPS/lib/libcodec2.a"
-          test -f "$DEPS/include/codec2/codec2.h"
-
-          # Confirm the old conflicting symbols are not exported by Codec2.
-          if llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
-            | grep -E '[[:space:]](lpc_to_lsp|lsp_to_lpc)$'; then
-            echo "ERROR: Original conflicting Codec2 symbols are still present" >&2
+          echo "=== Validate Codec2 installation ==="
+          if [ ! -f "$DEPS/lib/libcodec2.a" ]; then
+            echo "ERROR: libcodec2.a was not installed" >&2
+            find "$DEPS" -iname '*codec2*' -print
             exit 1
           fi
 
-          echo "Codec2 built successfully"
+          if [ ! -f "$DEPS/include/codec2/codec2.h" ] && \
+             [ ! -f "$DEPS/include/codec2.h" ]; then
+            echo "ERROR: Codec2 headers were not found under $DEPS/include" >&2
+            find "$DEPS/include" -iname '*codec2*' -print
+            exit 1
+          fi
+
+          echo "=== Verify renamed Codec2 symbols ==="
+          llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
+            | grep -E '[[:space:]]codec2_(lpc_to_lsp|lsp_to_lpc)$' \
+            || {
+              echo "ERROR: Expected renamed Codec2 symbols were not found." >&2
+              echo "Check whether this Codec2 revision uses these symbol names." >&2
+              exit 1
+            }
+
+          if llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
+            | grep -E '[[:space:]](lpc_to_lsp|lsp_to_lpc)$'; then
+            echo "ERROR: Original conflicting Codec2 symbols remain in the archive" >&2
+            exit 1
+          fi
+
+          echo "=== Codec2 build completed successfully ==="
+          ls -lh "$DEPS/lib/libcodec2.a"
           
       - name: Build FDK-AAC
         shell: bash
