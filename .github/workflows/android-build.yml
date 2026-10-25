@@ -1507,8 +1507,6 @@ jobs:
           cd codec2-src
 
           echo "=== Build host-native codebook generator ==="
-          # The generator must run on the GitHub Actions Linux host,
-          # not on the Android ARM64 target.
           env -u CC -u CXX -u AR -u RANLIB cmake \
             -S . -B build-host \
             -DCMAKE_BUILD_TYPE=Release \
@@ -1521,67 +1519,69 @@ jobs:
 
           HOST_GENERATOR="$RUNNER_TEMP/codec2-src/build-host/src/generate_codebook"
 
-          if [ ! -x "$HOST_GENERATOR" ]; then
-            echo "ERROR: Host generate_codebook executable was not created" >&2
+          test -x "$HOST_GENERATOR" || {
+            echo "ERROR: Host generator not found: $HOST_GENERATOR" >&2
             find build-host -name generate_codebook -type f -print
             exit 1
-          fi
+          }
 
           file "$HOST_GENERATOR" | tee "$RUNNER_TEMP/codec2-host-generator.txt"
-
-          if ! grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt"; then
-            echo "ERROR: generate_codebook does not appear to be a host x86-64 executable" >&2
+          grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt" || {
+            echo "ERROR: Generator is not a host x86-64 executable" >&2
             exit 1
-          fi
+          }
 
-          echo "=== Prepare Codec2 cross-compilation ==="
-          # Rename the symbols that conflict with Speex.
-          # Apply these flags globally so both the library and Codec2's
-          # internal tools use the same symbol names.
-          CODEC2_SYMBOL_FLAGS="-Dlpc_to_lsp=codec2_lpc_to_lsp -Dlsp_to_lpc=codec2_lsp_to_lpc"
-
-          # Replace the upstream codebook-generator block with an imported
-          # host executable when cross-compiling.
+          echo "=== Patch Codec2 generator configuration ==="
           python3 - <<'PY'
           from pathlib import Path
+          import re
+          import sys
 
           path = Path("src/CMakeLists.txt")
           source = path.read_text()
 
-          old = """if(CMAKE_CROSSCOMPILING)
-              include(${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
-          else(CMAKE_CROSSCOMPILING)
-              add_executable(generate_codebook generate_codebook.c)
-              target_link_libraries(generate_codebook m)
-              export(TARGETS generate_codebook
-                  FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
-          endif(CMAKE_CROSSCOMPILING)"""
+          # Locate the cross-compilation branch and replace only its
+          # ImportExecutables include. Keep the native-build branch intact.
+          pattern = re.compile(
+              r'if\s*\(\s*CMAKE_CROSSCOMPILING\s*\)\s*'
+              r'(.*?)'
+              r'else\s*\(\s*CMAKE_CROSSCOMPILING\s*\)',
+              re.S
+          )
 
-          new = """if(CMAKE_CROSSCOMPILING)
+          match = pattern.search(source)
+          if not match:
+              print("ERROR: Could not locate the CMAKE_CROSSCOMPILING block.")
+              for i, line in enumerate(source.splitlines(), 1):
+                  if "generate_codebook" in line or "CMAKE_CROSSCOMPILING" in line:
+                      print(f"{i}: {line}")
+              sys.exit(1)
+
+          branch = match.group(1)
+          if "ImportExecutables.cmake" not in branch:
+              print("ERROR: Cross-compilation branch does not include ImportExecutables.cmake.")
+              print("Matched branch was:")
+              print(branch)
+              sys.exit(1)
+
+          replacement = """
+          if(CMAKE_CROSSCOMPILING)
               if(NOT DEFINED GENERATE_CODEBOOK OR NOT EXISTS "${GENERATE_CODEBOOK}")
                   message(FATAL_ERROR "GENERATE_CODEBOOK must point to a runnable host executable")
               endif()
               add_executable(generate_codebook IMPORTED GLOBAL)
               set_target_properties(generate_codebook PROPERTIES
                   IMPORTED_LOCATION "${GENERATE_CODEBOOK}")
-          else(CMAKE_CROSSCOMPILING)
-              add_executable(generate_codebook generate_codebook.c)
-              target_link_libraries(generate_codebook m)
-              export(TARGETS generate_codebook
-                  FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
-          endif(CMAKE_CROSSCOMPILING)"""
+          else(CMAKE_CROSSCOMPILING)"""
 
-          if old not in source:
-              print("Could not find the expected generate_codebook CMake block.")
-              print("Inspect src/CMakeLists.txt and update the patch for this revision.")
-              raise SystemExit(1)
-
-          source = source.replace(old, new, 1)
+          source = source[:match.start()] + replacement + source[match.end():]
           path.write_text(source)
-          print("Patched src/CMakeLists.txt to use the host-native generator.")
+          print("Patched cross-compilation branch to use the host generator.")
           PY
 
           echo "=== Configure Codec2 for Android ARM64 ==="
+          CODEC2_SYMBOL_FLAGS="-Dlpc_to_lsp=codec2_lpc_to_lsp -Dlsp_to_lpc=codec2_lsp_to_lpc"
+
           cmake -S . -B build-android \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -1614,18 +1614,16 @@ jobs:
             exit 1
           fi
 
-          echo "=== Verify renamed Codec2 symbols ==="
+          echo "=== Verify Codec2 symbol renaming ==="
           llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
-            | grep -E '[[:space:]]codec2_(lpc_to_lsp|lsp_to_lpc)$' \
-            || {
-              echo "ERROR: Expected renamed Codec2 symbols were not found." >&2
-              echo "Check whether this Codec2 revision uses these symbol names." >&2
+            | grep -E '[[:space:]]codec2_(lpc_to_lsp|lsp_to_lpc)$' || {
+              echo "ERROR: Expected renamed symbols were not found." >&2
               exit 1
             }
 
           if llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
             | grep -E '[[:space:]](lpc_to_lsp|lsp_to_lpc)$'; then
-            echo "ERROR: Original conflicting Codec2 symbols remain in the archive" >&2
+            echo "ERROR: Original conflicting symbols remain in libcodec2.a" >&2
             exit 1
           fi
 
