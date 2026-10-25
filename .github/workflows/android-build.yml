@@ -1504,8 +1504,11 @@ jobs:
           git clone --depth 1 https://github.com/drowe67/codec2.git codec2-src
           cd codec2-src
 
-          # Build the codebook generator for the Linux host.
-          cmake -S . -B build-host \
+          # Build generate_codebook natively for the Linux x86-64 runner.
+          # The workflow's global CC/CXX point to the Android cross-compiler,
+          # so explicitly unset them for this configuration.
+          env -u CC -u CXX -u AR -u RANLIB cmake \
+            -S . -B build-host \
             -DCMAKE_BUILD_TYPE=Release \
             -DUNITTEST=OFF \
             -DLPCNET=OFF
@@ -1515,9 +1518,12 @@ jobs:
             --parallel "$BUILD_JOBS"
 
           HOST_GENERATOR="$RUNNER_TEMP/codec2-src/build-host/src/generate_codebook"
-          test -x "$HOST_GENERATOR"
 
-          # Patch the cross-compilation rule to use the host generator.
+          test -x "$HOST_GENERATOR"
+          file "$HOST_GENERATOR" | tee "$RUNNER_TEMP/codec2-host-generator.txt"
+          grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt"
+
+          # Patch Codec2 to use the native generator while cross-compiling.
           python3 - <<'PY'
           from pathlib import Path
 
@@ -1529,15 +1535,11 @@ jobs:
 
           start = source.find(start_marker)
           if start < 0:
-              raise SystemExit(
-                  "Could not find the CMAKE_CROSSCOMPILING block in src/CMakeLists.txt"
-              )
+              raise SystemExit("Could not find CMAKE_CROSSCOMPILING block")
 
           end = source.find(end_marker, start)
           if end < 0:
-              raise SystemExit(
-                  "Could not find the end of the CMAKE_CROSSCOMPILING block"
-              )
+              raise SystemExit("Could not find end of CMAKE_CROSSCOMPILING block")
           end += len(end_marker)
 
           replacement = '''if(CMAKE_CROSSCOMPILING)
@@ -1558,7 +1560,7 @@ jobs:
           print("Patched Codec2 cross-compilation rule")
           PY
 
-          # Cross-compile Codec2 for Android ARM64.
+          # Cross-compile the actual Codec2 library for Android ARM64, API 24.
           cmake -S . -B build-android \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -1573,7 +1575,6 @@ jobs:
           cmake --build build-android --parallel "$BUILD_JOBS"
           cmake --install build-android
 
-          # Verify the static library and public header were installed.
           test -f "$DEPS/lib/libcodec2.a"
           test -f "$DEPS/include/codec2/codec2.h"
 
