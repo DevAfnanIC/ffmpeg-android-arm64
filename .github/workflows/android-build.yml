@@ -1507,6 +1507,7 @@ jobs:
           cd codec2-src
 
           echo "=== Build host-native codebook generator ==="
+          # Build this tool for the Linux runner, not Android ARM64.
           env -u CC -u CXX -u AR -u RANLIB cmake \
             -S . -B build-host \
             -DCMAKE_BUILD_TYPE=Release \
@@ -1519,19 +1520,20 @@ jobs:
 
           HOST_GENERATOR="$RUNNER_TEMP/codec2-src/build-host/src/generate_codebook"
 
-          test -x "$HOST_GENERATOR" || {
+          if [ ! -x "$HOST_GENERATOR" ]; then
             echo "ERROR: Host generator not found: $HOST_GENERATOR" >&2
             find build-host -name generate_codebook -type f -print
             exit 1
-          }
+          fi
 
           file "$HOST_GENERATOR" | tee "$RUNNER_TEMP/codec2-host-generator.txt"
-          grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt" || {
+
+          if ! grep -qE 'x86-64|x86_64' "$RUNNER_TEMP/codec2-host-generator.txt"; then
             echo "ERROR: Generator is not a host x86-64 executable" >&2
             exit 1
-          }
+          fi
 
-          echo "=== Patch Codec2 generator configuration ==="
+          echo "=== Patch Codec2 native-generator block ==="
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -1540,46 +1542,54 @@ jobs:
           path = Path("src/CMakeLists.txt")
           source = path.read_text()
 
-          # Locate the cross-compilation branch and replace only its
-          # ImportExecutables include. Keep the native-build branch intact.
+          # Replace the cross-compiling branch that creates codec2_native
+          # with an imported executable pointing at our host-built generator.
           pattern = re.compile(
-              r'if\s*\(\s*CMAKE_CROSSCOMPILING\s*\)\s*'
-              r'(.*?)'
-              r'else\s*\(\s*CMAKE_CROSSCOMPILING\s*\)',
+              r'if\s*\(\s*CMAKE_CROSSCOMPILING\s*\)'
+              r'(?:(?!if\s*\(\s*CMAKE_CROSSCOMPILING\s*\)).)*?'
+              r'ExternalProject_Add\s*\(\s*codec2_native\b.*?'
+              r'add_dependencies\s*\(\s*generate_codebook\s+codec2_native\s*\)'
+              r'(?:(?!endif\s*\(\s*CMAKE_CROSSCOMPILING\s*\)).)*?'
+              r'endif\s*\(\s*CMAKE_CROSSCOMPILING\s*\)',
               re.S
           )
 
-          match = pattern.search(source)
-          if not match:
-              print("ERROR: Could not locate the CMAKE_CROSSCOMPILING block.")
-              for i, line in enumerate(source.splitlines(), 1):
-                  if "generate_codebook" in line or "CMAKE_CROSSCOMPILING" in line:
-                      print(f"{i}: {line}")
-              sys.exit(1)
-
-          branch = match.group(1)
-          if "ImportExecutables.cmake" not in branch:
-              print("ERROR: Cross-compilation branch does not include ImportExecutables.cmake.")
-              print("Matched branch was:")
-              print(branch)
-              sys.exit(1)
-
-          replacement = """
-          if(CMAKE_CROSSCOMPILING)
+          replacement = '''if(CMAKE_CROSSCOMPILING)
               if(NOT DEFINED GENERATE_CODEBOOK OR NOT EXISTS "${GENERATE_CODEBOOK}")
                   message(FATAL_ERROR "GENERATE_CODEBOOK must point to a runnable host executable")
               endif()
               add_executable(generate_codebook IMPORTED GLOBAL)
               set_target_properties(generate_codebook PROPERTIES
                   IMPORTED_LOCATION "${GENERATE_CODEBOOK}")
-          else(CMAKE_CROSSCOMPILING)"""
+          else(CMAKE_CROSSCOMPILING)
+              add_executable(generate_codebook generate_codebook.c)
+              target_link_libraries(generate_codebook m)
+              export(TARGETS generate_codebook
+                  FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
+          endif(CMAKE_CROSSCOMPILING)'''
 
-          source = source[:match.start()] + replacement + source[match.end():]
-          path.write_text(source)
-          print("Patched cross-compilation branch to use the host generator.")
+          updated, count = pattern.subn(
+              lambda match: replacement, source, count=1
+          )
+
+          if count != 1:
+              print("ERROR: Could not locate Codec2's expected native-generator block.")
+              for i, line in enumerate(source.splitlines(), 1):
+                  if any(term in line for term in (
+                      "CMAKE_CROSSCOMPILING",
+                      "ExternalProject_Add",
+                      "codec2_native",
+                      "add_dependencies(generate_codebook"
+                  )):
+                      print(f"{i}: {line}")
+              sys.exit(1)
+
+          path.write_text(updated)
+          print("Successfully patched src/CMakeLists.txt.")
           PY
 
           echo "=== Configure Codec2 for Android ARM64 ==="
+          # Avoid collisions with identically named Speex symbols.
           CODEC2_SYMBOL_FLAGS="-Dlpc_to_lsp=codec2_lpc_to_lsp -Dlsp_to_lpc=codec2_lsp_to_lpc"
 
           cmake -S . -B build-android \
@@ -1614,10 +1624,10 @@ jobs:
             exit 1
           fi
 
-          echo "=== Verify Codec2 symbol renaming ==="
+          echo "=== Verify renamed Codec2 symbols ==="
           llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
             | grep -E '[[:space:]]codec2_(lpc_to_lsp|lsp_to_lpc)$' || {
-              echo "ERROR: Expected renamed symbols were not found." >&2
+              echo "ERROR: Expected renamed Codec2 symbols were not found." >&2
               exit 1
             }
 
