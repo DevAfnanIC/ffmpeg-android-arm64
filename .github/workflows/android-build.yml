@@ -1805,34 +1805,20 @@ jobs:
           BUILD="$RUNNER_TEMP/libbluray-build"
           CROSS_FILE="$RUNNER_TEMP/android-arm64-meson.ini"
 
-          # Confirm required dependencies are already installed.
-          test -s "$DEPS/lib/libfreetype.a" || {
-            echo "::error::FreeType static library not found: $DEPS/lib/libfreetype.a"
-            exit 1
-          }
+          # Verify required dependency libraries and headers.
+          for file in \
+            "$DEPS/lib/libfreetype.a" \
+            "$DEPS/lib/libfontconfig.a" \
+            "$DEPS/lib/libxml2.a" \
+            "$DEPS/include/freetype2/ft2build.h" \
+            "$DEPS/include/libxml2/libxml/parser.h"; do
+            if [ ! -s "$file" ]; then
+              echo "::error::Required dependency file missing: $file"
+              exit 1
+            fi
+          done
 
-          test -f "$DEPS/include/freetype2/ft2build.h" || {
-            echo "::error::FreeType header not found."
-            find "$DEPS/include" -name ft2build.h -print || true
-            exit 1
-          }
-
-          test -s "$DEPS/lib/libfontconfig.a" || {
-            echo "::error::Fontconfig static library not found: $DEPS/lib/libfontconfig.a"
-            exit 1
-          }
-
-          test -s "$DEPS/lib/libxml2.a" || {
-            echo "::error::libxml2 static library not found: $DEPS/lib/libxml2.a"
-            exit 1
-          }
-
-          test -f "$DEPS/include/libxml2/libxml/parser.h" || {
-            echo "::error::libxml2 headers not found."
-            exit 1
-          }
-
-          # Fetch libbluray source.
+          # Download libbluray and its bundled libudfread submodule.
           rm -rf "$SRC" "$BUILD"
 
           git clone --depth 1 \
@@ -1842,15 +1828,12 @@ jobs:
           cd "$SRC"
           git submodule update --init --recursive
 
-          # Use only the dependencies installed for this Android build.
+          # Use dependencies installed for this Android build.
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          # Meson's sys_root property can cause pkg-config to prepend the
-          # Android sysroot to dependency paths under $DEPS. Do not set
-          # sys_root in the cross file; pass it directly to the compiler.
-
+          # Create a valid Meson cross-compilation file.
           cat > "$CROSS_FILE" <<EOF
           [binaries]
           c = '$CC'
@@ -1869,38 +1852,20 @@ jobs:
           needs_exe_wrapper = true
 
           [built-in options]
-          c_args = [
-            '--sysroot=$SYSROOT',
-            '-I$DEPS/include',
-            '-I$DEPS/include/freetype2',
-            '-I$DEPS/include/libxml2',
-            '-fPIC'
-          ]
-          c_link_args = [
-            '--sysroot=$SYSROOT',
-            '-L$DEPS/lib'
-          ]
-          cpp_args = [
-            '--sysroot=$SYSROOT',
-            '-I$DEPS/include',
-            '-I$DEPS/include/freetype2',
-            '-I$DEPS/include/libxml2',
-            '-fPIC'
-          ]
-          cpp_link_args = [
-            '--sysroot=$SYSROOT',
-            '-L$DEPS/lib'
-          ]
+          c_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-I$DEPS/include/freetype2', '-I$DEPS/include/libxml2', '-fPIC']
+          c_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          cpp_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-I$DEPS/include/freetype2', '-I$DEPS/include/libxml2', '-fPIC']
+          cpp_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
           EOF
 
-          # Install Meson and Ninja for the build.
+          # Install Ninja if it is not already available.
           python3 -m pip install --user meson ninja
           export PATH="$HOME/.local/bin:$PATH"
 
           meson --version
           ninja --version
 
-          # Configure a static Android ARM64 build.
+          # Configure libbluray as a static Android ARM64 library.
           meson setup "$BUILD" "$SRC" \
             --cross-file "$CROSS_FILE" \
             --prefix="$DEPS" \
@@ -1912,18 +1877,18 @@ jobs:
             -Dfontconfig=enabled \
             -Dlibxml2=enabled
 
-          # Compile and install.
+          # Build and install.
           meson compile -C "$BUILD" -j "$BUILD_JOBS"
           meson install -C "$BUILD"
 
-          # Verify the static library and public headers.
+          # Verify the outputs.
           test -s "$DEPS/lib/libbluray.a" || {
             echo "::error::libbluray static library was not produced."
             exit 1
           }
 
           test -f "$DEPS/include/libbluray/bluray.h" || {
-            echo "::error::libbluray public header was not installed."
+            echo "::error::libbluray header was not installed."
             exit 1
           }
 
