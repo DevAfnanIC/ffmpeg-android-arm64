@@ -1556,8 +1556,48 @@ jobs:
                   FILE ${CMAKE_BINARY_DIR}/ImportExecutables.cmake)
           endif(CMAKE_CROSSCOMPILING)'''
 
-          path.write_text(source[:start] + replacement + source[end:])
-          print("Patched Codec2 cross-compilation rule")
+          source = source[:start] + replacement + source[end:]
+
+          # Rename Codec2's conflicting symbols so they do not collide with Speex.
+          marker = "add_library(codec2"
+          start = source.find(marker)
+          if start < 0:
+              raise SystemExit("Could not find add_library(codec2 ...)")
+
+          # Find the end of the add_library command, accounting for nested parentheses.
+          opening = source.find("(", start)
+          if opening < 0:
+              raise SystemExit("Could not find opening parenthesis for add_library(codec2)")
+
+          depth = 0
+          end = None
+          for i in range(opening, len(source)):
+              if source[i] == "(":
+                  depth += 1
+              elif source[i] == ")":
+                  depth -= 1
+                  if depth == 0:
+                      end = i + 1
+                      break
+
+          if end is None:
+              raise SystemExit("Could not find end of add_library(codec2 ...)")
+
+          definitions = '''
+
+          # Keep these symbol names private to Codec2 to avoid conflicts with Speex.
+          target_compile_definitions(codec2 PRIVATE
+              lpc_to_lsp=codec2_lpc_to_lsp
+              lsp_to_lpc=codec2_lsp_to_lpc
+          )
+          '''
+
+          if "target_compile_definitions(codec2 PRIVATE" in source:
+              raise SystemExit("Codec2 symbol-renaming definitions already exist")
+
+          source = source[:end] + definitions + source[end:]
+          path.write_text(source)
+          print("Patched Codec2 cross-compilation rule and renamed conflicting symbols")
           PY
 
           # Cross-compile the actual Codec2 library for Android ARM64, API 24.
@@ -1577,6 +1617,13 @@ jobs:
 
           test -f "$DEPS/lib/libcodec2.a"
           test -f "$DEPS/include/codec2/codec2.h"
+
+          # Confirm the old conflicting symbols are not exported by Codec2.
+          if llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
+            | grep -E '[[:space:]](lpc_to_lsp|lsp_to_lpc)$'; then
+            echo "ERROR: Original conflicting Codec2 symbols are still present" >&2
+            exit 1
+          fi
 
           echo "Codec2 built successfully"
           
