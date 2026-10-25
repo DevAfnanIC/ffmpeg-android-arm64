@@ -1752,6 +1752,50 @@ jobs:
 
           echo "librtmp static library built successfully."
 
+      - name: Build libxml2 for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="$RUNNER_TEMP/libxml2-src"
+          BUILD="$RUNNER_TEMP/libxml2-build"
+
+          curl -fL \
+            https://download.gnome.org/sources/libxml2/2.14/libxml2-2.14.5.tar.xz \
+            -o "$RUNNER_TEMP/libxml2.tar.xz"
+
+          mkdir -p "$SRC"
+          tar -xJf "$RUNNER_TEMP/libxml2.tar.xz" \
+            -C "$SRC" --strip-components=1
+
+          cmake -S "$SRC" -B "$BUILD" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-$ANDROID_API" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_AR="$AR" \
+            -DCMAKE_RANLIB="$RANLIB" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLIBXML2_WITH_PROGRAMS=OFF \
+            -DLIBXML2_WITH_TESTS=OFF \
+            -DLIBXML2_WITH_PYTHON=OFF \
+            -DLIBXML2_WITH_LZMA=OFF \
+            -DLIBXML2_WITH_ZLIB=OFF \
+            -DLIBXML2_WITH_ICONV=OFF
+
+          cmake --build "$BUILD" \
+            --parallel "$BUILD_JOBS"
+
+          cmake --install "$BUILD"
+
+          test -f "$DEPS/include/libxml2/libxml/parser.h"
+          test -s "$DEPS/lib/libxml2.a"
+
+          echo "libxml2 static library built successfully."
+          
       - name: Prepare libbluray Android ARM64 build
         shell: bash
         run: |
