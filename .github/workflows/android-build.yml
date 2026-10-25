@@ -1507,7 +1507,7 @@ jobs:
           cd codec2-src
 
           echo "=== Build host-native codebook generator ==="
-          # Build this tool for the Linux runner, not Android ARM64.
+          # Build the generator for the GitHub Actions Linux host.
           env -u CC -u CXX -u AR -u RANLIB cmake \
             -S . -B build-host \
             -DCMAKE_BUILD_TYPE=Release \
@@ -1542,8 +1542,7 @@ jobs:
           path = Path("src/CMakeLists.txt")
           source = path.read_text()
 
-          # Replace the cross-compiling branch that creates codec2_native
-          # with an imported executable pointing at our host-built generator.
+          # Replace the cross-compiling branch that creates codec2_native.
           pattern = re.compile(
               r'if\s*\(\s*CMAKE_CROSSCOMPILING\s*\)'
               r'(?:(?!if\s*\(\s*CMAKE_CROSSCOMPILING\s*\)).)*?'
@@ -1589,7 +1588,7 @@ jobs:
           PY
 
           echo "=== Configure Codec2 for Android ARM64 ==="
-          # Avoid collisions with identically named Speex symbols.
+          # Rename the two symbols that conflict with Speex.
           CODEC2_SYMBOL_FLAGS="-Dlpc_to_lsp=codec2_lpc_to_lsp -Dlsp_to_lpc=codec2_lsp_to_lpc"
 
           cmake -S . -B build-android \
@@ -1625,19 +1624,32 @@ jobs:
           fi
 
           echo "=== Verify renamed Codec2 symbols ==="
-          llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
-            | grep -E '[[:space:]]codec2_(lpc_to_lsp|lsp_to_lpc)$' || {
-              echo "ERROR: Expected renamed Codec2 symbols were not found." >&2
-              exit 1
-            }
+          NM="$TOOLCHAIN/bin/llvm-nm"
 
-          if llvm-nm -g --defined-only "$DEPS/lib/libcodec2.a" \
+          if [ ! -x "$NM" ]; then
+            echo "ERROR: NDK llvm-nm not found at $NM" >&2
+            ls -la "$TOOLCHAIN/bin/"*nm* || true
+            exit 1
+          fi
+
+          echo "--- Defined renamed symbols ---"
+          if ! "$NM" -g --defined-only "$DEPS/lib/libcodec2.a" \
+            | grep -E '[[:space:]]codec2_(lpc_to_lsp|lsp_to_lpc)$'; then
+            echo "ERROR: Expected renamed Codec2 symbols were not found." >&2
+            echo "--- Matching symbols in archive ---"
+            "$NM" -g "$DEPS/lib/libcodec2.a" \
+              | grep -E 'lpc_to_lsp|lsp_to_lpc' || true
+            exit 1
+          fi
+
+          echo "--- Check original conflicting symbols are absent ---"
+          if "$NM" -g --defined-only "$DEPS/lib/libcodec2.a" \
             | grep -E '[[:space:]](lpc_to_lsp|lsp_to_lpc)$'; then
             echo "ERROR: Original conflicting symbols remain in libcodec2.a" >&2
             exit 1
           fi
 
-          echo "=== Codec2 build completed successfully ==="
+          echo "=== Codec2 build and symbol checks completed ==="
           ls -lh "$DEPS/lib/libcodec2.a"
           
       - name: Build FDK-AAC
