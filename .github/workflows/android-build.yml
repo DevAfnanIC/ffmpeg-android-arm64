@@ -1895,6 +1895,57 @@ jobs:
           echo "libbluray static library built successfully."
           ls -lh "$DEPS/lib/libbluray.a"
           ls -l "$DEPS/include/libbluray/bluray.h"
+
+      - name: Verify and prepare librtmp pkg-config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$DEPS/lib/pkgconfig"
+
+          echo "=== Inspect librtmp installation ==="
+          find "$DEPS" \( \
+            -name 'librtmp.a' -o \
+            -name 'rtmp.h' -o \
+            -name 'librtmp.pc' \
+          \) -print
+
+          test -s "$DEPS/lib/librtmp.a" || {
+            echo "::error::librtmp static library missing. Fix the Build librtmp step first."
+            exit 1
+          }
+
+          test -f "$DEPS/include/librtmp/rtmp.h" || {
+            echo "::error::librtmp headers missing. Fix the Build librtmp step first."
+            exit 1
+          }
+
+          # Generate pkg-config metadata if the build did not install it.
+          if [ ! -s "$DEPS/lib/pkgconfig/librtmp.pc" ]; then
+            cat > "$DEPS/lib/pkgconfig/librtmp.pc" <<EOF
+          prefix=$DEPS
+          exec_prefix=\${prefix}
+          libdir=\${prefix}/lib
+          includedir=\${prefix}/include
+
+          Name: librtmp
+          Description: RTMP client library
+          Version: 2.6
+          Libs: -L\${libdir} -lrtmp
+          Cflags: -I\${includedir}
+          EOF
+          fi
+
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          echo "=== Verify librtmp pkg-config ==="
+          pkg-config --modversion librtmp
+          pkg-config --cflags librtmp
+          pkg-config --libs librtmp
+
+          echo "librtmp pkg-config verification passed."
           
       - name: Configure FFmpeg
         shell: bash
