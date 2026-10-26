@@ -1946,6 +1946,114 @@ jobs:
           pkg-config --libs librtmp
 
           echo "librtmp pkg-config verification passed."
+
+      - name: Build librubberband
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="$RUNNER_TEMP/rubberband-src"
+          BUILD="$RUNNER_TEMP/rubberband-build"
+          CROSS_FILE="$RUNNER_TEMP/android-arm64-rubberband.ini"
+
+          export PATH="$TOOLCHAIN/bin:$HOME/.local/bin:$PATH"
+
+          # Clean previous source and build directories.
+          rm -rf "$SRC" "$BUILD"
+
+          # Download a pinned upstream release.
+          git clone --depth 1 --branch v3.3.0 \
+            https://github.com/breakfastquay/rubberband.git \
+            "$SRC"
+
+          # Create the Android ARM64 Meson cross file.
+          cat > "$CROSS_FILE" <<EOF
+          [binaries]
+          c = '$CC'
+          cpp = '$CXX'
+          ar = '$AR'
+          strip = '$STRIP'
+          pkg-config = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+
+          [built-in options]
+          c_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-fPIC']
+          c_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          cpp_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-fPIC']
+          cpp_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          EOF
+
+          # Ensure Meson and Ninja are available.
+          python3 -m pip install --user meson ninja
+
+          meson --version
+          ninja --version
+
+          # Keep pkg-config limited to our Android dependencies.
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          mkdir -p "$DEPS/lib/pkgconfig"
+
+          # Configure a static library-only build.
+          meson setup "$BUILD" "$SRC" \
+            --cross-file "$CROSS_FILE" \
+            --prefix="$DEPS" \
+            --libdir=lib \
+            --default-library=static \
+            --buildtype=release \
+            -Dauto_features=disabled \
+            -Dcmdline=disabled \
+            -Dladspa=disabled \
+            -Dlv2=disabled \
+            -Dvamp=disabled \
+            -Djni=disabled \
+            -Dtests=disabled \
+            -Dfft=builtin \
+            -Dresampler=builtin
+
+          # Compile and install.
+          meson compile -C "$BUILD" -j "$BUILD_JOBS"
+          meson install -C "$BUILD"
+
+          # Verify the installed static library and public API.
+          test -s "$DEPS/lib/librubberband.a" || {
+            echo "::error::librubberband.a was not installed."
+            find "$DEPS" -iname '*rubberband*' -print
+            exit 1
+          }
+
+          test -f "$DEPS/include/rubberband/rubberband-c.h" || {
+            echo "::error::Rubber Band C API header is missing."
+            find "$DEPS/include" -iname '*rubberband*' -print
+            exit 1
+          }
+
+          # FFmpeg requires the pkg-config package named rubberband.
+          test -s "$DEPS/lib/pkgconfig/rubberband.pc" || {
+            echo "::error::rubberband.pc was not installed."
+            find "$DEPS" -name '*.pc' -iname '*rubberband*' -print
+            exit 1
+          }
+
+          echo "=== Verify Rubber Band pkg-config ==="
+          pkg-config --modversion rubberband
+          pkg-config --cflags rubberband
+          pkg-config --static --libs rubberband
+
+          echo "=== Verify static library ==="
+          ls -lh "$DEPS/lib/librubberband.a"
+
+          echo "librubberband built successfully for Android ARM64."
           
       - name: Configure FFmpeg
         shell: bash
@@ -2060,7 +2168,8 @@ jobs:
             --enable-libfdk-aac \
             --enable-libxvid \
             --enable-librtmp \
-            --enable-libbluray
+            --enable-libbluray \
+            --enable-librubberband
 
 
           echo "=== Verify selected FFmpeg features ==="
@@ -2069,7 +2178,7 @@ jobs:
             LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
             LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA LIBOPENMPT \
             LIBOPUS LIBVORBIS LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR \
-            LIBCODEC2 LIBFDK_AAC LIBXVID LIBRTMP LIBBLURAY; do
+            LIBCODEC2 LIBFDK_AAC LIBXVID LIBRTMP LIBBLURAY LIBRUBBERBAND; do
             if grep -q "^#define CONFIG_${feature} 1$" config.h; then
               echo "ENABLED: $feature"
             else
