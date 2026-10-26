@@ -2161,6 +2161,48 @@ jobs:
           ls -lh "$DEPS/lib/libvmaf.a"
 
           echo "libvmaf built successfully for Android ARM64."
+
+      - name: Diagnose libvmaf pkg-config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          echo "=== Find VMAF installation files ==="
+          find "$DEPS" \( \
+            -name 'libvmaf.a' -o \
+            -name 'libvmaf.pc' -o \
+            -name 'libvmaf.h' \
+          \) -print
+
+          echo "=== Check expected files ==="
+          ls -l "$DEPS/lib/libvmaf.a" || true
+          ls -l "$DEPS/lib/pkgconfig/libvmaf.pc" || true
+          ls -l "$DEPS/include/libvmaf/libvmaf.h" || true
+
+          if [ -f "$DEPS/lib/pkgconfig/libvmaf.pc" ]; then
+            echo "=== libvmaf.pc contents ==="
+            cat "$DEPS/lib/pkgconfig/libvmaf.pc"
+          fi
+
+          echo "=== pkg-config search paths ==="
+          pkg-config --variable pc_path pkg-config || true
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
+
+          echo "=== Check VMAF package ==="
+          if pkg-config --exists 'libvmaf >= 2.0.0'; then
+            pkg-config --modversion libvmaf
+            pkg-config --cflags libvmaf
+            pkg-config --static --libs libvmaf
+          else
+            echo "::error::libvmaf is not discoverable at version >= 2.0.0"
+            pkg-config --debug --exists 'libvmaf >= 2.0.0' || true
+            exit 1
+          fi
           
       - name: Configure FFmpeg
         shell: bash
