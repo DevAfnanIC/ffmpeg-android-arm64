@@ -2222,7 +2222,7 @@ jobs:
             x264 x265 vpx aom dav1d SvtAv1Enc \
             freetype2 fribidi harfbuzz fontconfig libass \
             opus vorbis vorbisenc lame twolame speex soxr \
-            libopenjp2 lc3 theoradec theoraenc libopenmpt; do
+            libopenjp2 lc3 theoradec theoraenc libopenmpt libvmaf; do
             if pkg-config --exists "$package"; then
               printf 'FOUND: %s (%s)\n' \
                 "$package" "$(pkg-config --modversion "$package")"
@@ -2263,6 +2263,16 @@ jobs:
 
           cd "$SRC"
 
+          echo "=== Verify VMAF immediately before FFmpeg configure ==="
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          command -v pkg-config
+          pkg-config --modversion libvmaf
+          pkg-config --exists 'libvmaf >= 2.0.0'
+          pkg-config --static --libs libvmaf
+          
           ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
