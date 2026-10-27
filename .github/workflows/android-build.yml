@@ -2272,7 +2272,8 @@ jobs:
           pkg-config --modversion libvmaf
           pkg-config --exists 'libvmaf >= 2.0.0'
           pkg-config --static --libs libvmaf
-          
+
+          set +e
           ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
@@ -2329,7 +2330,24 @@ jobs:
             --enable-librtmp \
             --enable-libbluray \
             --enable-librubberband \
-            --enable-libvmaf \
+            --enable-libvmaf
+            configure_status=$?
+            set -e
+
+            if [ "$configure_status" -ne 0 ]; then
+              echo "=== FFmpeg configure failure: VMAF context ==="
+              grep -ni -C 12 'vmaf' ffbuild/config.log || true
+
+              echo "=== Last configure log lines ==="
+              tail -n 100 ffbuild/config.log || true
+
+              echo "=== VMAF package metadata ==="
+              pkg-config --modversion libvmaf || true
+              pkg-config --cflags --libs libvmaf || true
+              pkg-config --static --cflags --libs libvmaf || true
+
+              exit "$configure_status"
+            fi
 
 
           echo "=== Verify selected FFmpeg features ==="
