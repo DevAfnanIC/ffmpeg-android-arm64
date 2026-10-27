@@ -2134,6 +2134,22 @@ jobs:
           meson compile -C "$BUILD" -j "$BUILD_JOBS"
           meson install -C "$BUILD"
 
+          echo "=== Add Android C++ runtime to static VMAF link flags ==="
+
+          VMAF_PC="$DEPS/lib/pkgconfig/libvmaf.pc"
+          test -s "$VMAF_PC"
+
+          sed -i '/^Libs:/ s/-lvmaf/-lvmaf -lc++/' "$VMAF_PC"
+
+          echo "=== Verify updated VMAF link flags ==="
+          grep '^Libs:' "$VMAF_PC"
+          pkg-config --static --libs libvmaf
+
+          pkg-config --static --libs libvmaf | grep -q -- '-lc++' || {
+          echo "ERROR: Android C++ runtime flag missing from libvmaf.pc"
+          exit 1
+          }
+
           # Verify installed artifacts.
           test -s "$DEPS/lib/libvmaf.a" || {
             echo "::error::libvmaf.a was not installed."
