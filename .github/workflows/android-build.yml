@@ -2118,6 +2118,75 @@ jobs:
           grep -q -- '-lc++' "$RUNNER_TEMP/libvmaf-link-flags.txt"
 
           echo "libvmaf build and verification succeeded."
+
+      - name: Build libjxl
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$RUNNER_TEMP"
+
+          echo "=== Clone libjxl ==="
+          git clone \
+            --branch v0.11.1 \
+            --depth 1 \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/libjxl/libjxl.git \
+            libjxl
+
+          cd "$RUNNER_TEMP/libjxl"
+
+          echo "=== Configure libjxl ==="
+          cmake -S . -B build \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_PREFIX_PATH="$DEPS" \
+            -DCMAKE_FIND_ROOT_PATH="$DEPS" \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF \
+            -DJPEGXL_ENABLE_TOOLS=OFF \
+            -DJPEGXL_ENABLE_VIEWERS=OFF \
+            -DJPEGXL_ENABLE_BENCHMARK=OFF \
+            -DJPEGXL_ENABLE_MANPAGES=OFF \
+            -DJPEGXL_ENABLE_JNI=OFF \
+            -DJPEGXL_ENABLE_PLUGINS=OFF \
+            -DJPEGXL_ENABLE_OPENEXR=OFF \
+            -DJPEGXL_ENABLE_SKCMS=OFF \
+            -DJPEGXL_ENABLE_SJPEG=OFF \
+            -DJPEGXL_ENABLE_TCMALLOC=OFF \
+            -DJPEGXL_ENABLE_LTO=OFF \
+            -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
+            -DJPEGXL_FORCE_SYSTEM_HWY=OFF \
+            -DJPEGXL_FORCE_SYSTEM_LCMS2=OFF
+
+          echo "=== Build and install libjxl ==="
+          cmake --build build --parallel "$BUILD_JOBS"
+          cmake --install build
+
+          echo "=== Verify libjxl headers and libraries ==="
+          test -s "$DEPS/include/jxl/decode.h"
+          test -s "$DEPS/include/jxl/encode.h"
+
+          find "$DEPS/lib" -maxdepth 2 \
+            \( -name '*jxl*.a' -o -name '*jxl*.pc' \) -print
+
+          echo "=== Verify pkg-config ==="
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          pkg-config --modversion libjxl
+          pkg-config --exists libjxl
+          pkg-config --static --libs libjxl
           
       - name: Configure FFmpeg
         shell: bash
@@ -2245,25 +2314,8 @@ jobs:
             --enable-librtmp \
             --enable-libbluray \
             --enable-librubberband \
-            --enable-libvmaf
-            configure_status=$?
-            set -e
-
-            if [ "$configure_status" -ne 0 ]; then
-              echo "=== FFmpeg configure failure: VMAF context ==="
-              grep -ni -C 12 'vmaf' ffbuild/config.log || true
-
-              echo "=== Last configure log lines ==="
-              tail -n 100 ffbuild/config.log || true
-
-              echo "=== VMAF package metadata ==="
-              pkg-config --modversion libvmaf || true
-              pkg-config --cflags --libs libvmaf || true
-              pkg-config --static --cflags --libs libvmaf || true
-
-              exit "$configure_status"
-            fi
-
+            --enable-libvmaf \
+            --enable-libjxl
 
           echo "=== Verify selected FFmpeg features ==="
           for feature in \
