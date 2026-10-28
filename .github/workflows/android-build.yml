@@ -2270,32 +2270,58 @@ jobs:
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== Verify JPEG XL thread library ==="
-          test -s "$DEPS/lib/libjxl_threads.a"
+          echo "=== Verify JPEG XL static libraries ==="
+          for lib in libjxl.a libjxl_threads.a; do
+            if [ ! -s "$DEPS/lib/$lib" ]; then
+              echo "::error::Missing JPEG XL library: $DEPS/lib/$lib"
+              exit 1
+            fi
+            ls -lh "$DEPS/lib/$lib"
+          done
 
+          echo "=== Verify JPEG XL thread-runner symbols ==="
           "$TOOLCHAIN/bin/llvm-nm" --defined-only \
             "$DEPS/lib/libjxl_threads.a" \
-            | grep 'JxlThreadParallelRunner'
+            | grep -E 'JxlThreadParallelRunner(Create|DefaultNumWorkerThreads|Destroy)?$'
 
-          echo "=== Verify pkg-config metadata ==="
-          pkg-config --modversion libjxl_threads
-          pkg-config --exists 'libjxl_threads >= 0.7.0'
-          pkg-config --cflags libjxl_threads
-          pkg-config --static --libs libjxl_threads
+          echo "=== Verify JPEG XL headers ==="
+          for header in \
+            jxl/decode.h \
+            jxl/encode.h \
+            jxl/thread_parallel_runner.h; do
+            if [ ! -s "$DEPS/include/$header" ]; then
+              echo "::error::Missing JPEG XL header: $DEPS/include/$header"
+              exit 1
+            fi
+            echo "FOUND: $header"
+          done
 
-          echo "=== Inspect FFmpeg configure log ==="
-          CONFIG_LOG="$RUNNER_TEMP/ffmpeg/ffbuild/config.log"
+          echo "=== Verify JPEG XL pkg-config metadata ==="
+          for package in libjxl libjxl_threads; do
+            PC_FILE="$DEPS/lib/pkgconfig/$package.pc"
 
-          if [ ! -s "$CONFIG_LOG" ]; then
-            echo "Configure log not found at: $CONFIG_LOG"
-            find "$RUNNER_TEMP/ffmpeg" -name config.log -print
-            exit 1
-          fi
+            if [ ! -s "$PC_FILE" ]; then
+              echo "::error::Missing pkg-config file: $PC_FILE"
+              exit 1
+            fi
 
-          grep -n -A35 -B15 \
-            'JxlThreadParallelRunner\|libjxl_threads' \
-            "$CONFIG_LOG" || true
-            
+            echo "--- $package ---"
+            pkg-config --modversion "$package"
+            pkg-config --cflags "$package"
+            pkg-config --static --libs "$package"
+          done
+
+          echo "=== Verify FFmpeg-compatible JPEG XL versions ==="
+          pkg-config --exists 'libjxl >= 0.8.0'
+          pkg-config --exists 'libjxl_threads >= 0.8.0'
+
+          echo "=== Confirm thread-runner header declaration ==="
+          grep -n 'JxlThreadParallelRunner' \
+            "$DEPS/include/jxl/thread_parallel_runner.h"
+
+          echo "JPEG XL prerequisite checks passed."
+          echo "The actual FFmpeg linker test will be diagnosed in the Configure FFmpeg step."
+          
       - name: Configure FFmpeg
         shell: bash
         run: |
@@ -2314,7 +2340,8 @@ jobs:
             x264 x265 vpx aom dav1d SvtAv1Enc \
             freetype2 fribidi harfbuzz fontconfig libass \
             opus vorbis vorbisenc lame twolame speex soxr \
-            libopenjp2 lc3 theoradec theoraenc libopenmpt libvmaf; do
+            libopenjp2 lc3 theoradec theoraenc libopenmpt libvmaf \
+            libjxl libjxl_threads; do
             if pkg-config --exists "$package"; then
               printf 'FOUND: %s (%s)\n' \
                 "$package" "$(pkg-config --modversion "$package")"
@@ -2326,7 +2353,7 @@ jobs:
           echo "=== Verify required subtitle dependencies ==="
           for package in freetype2 fribidi harfbuzz fontconfig libass; do
             pkg-config --exists "$package" || {
-              echo "Required subtitle dependency missing: $package"
+              echo "::error::Required subtitle dependency missing: $package"
               exit 1
             }
           done
@@ -2349,6 +2376,20 @@ jobs:
           echo "=== Verify libass ==="
           test -s "$DEPS/lib/libass.a"
 
+          echo "=== Verify JPEG XL static libraries ==="
+          test -s "$DEPS/lib/libjxl.a"
+          test -s "$DEPS/lib/libjxl_threads.a"
+          test -s "$DEPS/include/jxl/thread_parallel_runner.h"
+
+          pkg-config --exists 'libjxl >= 0.8.0'
+          pkg-config --exists 'libjxl_threads >= 0.8.0'
+
+          echo "libjxl: $(pkg-config --modversion libjxl)"
+          echo "libjxl_threads: $(pkg-config --modversion libjxl_threads)"
+          pkg-config --static --libs libjxl
+          pkg-config --static --libs libjxl_threads
+
+          echo "=== Prepare FFmpeg source ==="
           rm -rf "$SRC"
           git clone --depth 1 --branch "$VERSION" \
             https://git.ffmpeg.org/ffmpeg.git "$SRC"
@@ -2356,35 +2397,23 @@ jobs:
           cd "$SRC"
 
           echo "=== Verify VMAF immediately before FFmpeg configure ==="
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
-          command -v pkg-config
           pkg-config --modversion libvmaf
           pkg-config --exists 'libvmaf >= 2.0.0'
           pkg-config --static --libs libvmaf
 
-          echo "=== Verify JPEG XL packages before FFmpeg configure ==="
-
-          pkg-config --exists 'libjxl >= 0.8.0'
-          pkg-config --exists 'libjxl_threads >= 0.8.0'
-
+          echo "=== Verify JPEG XL immediately before FFmpeg configure ==="
           pkg-config --modversion libjxl
           pkg-config --modversion libjxl_threads
-
+          pkg-config --exists 'libjxl >= 0.8.0'
+          pkg-config --exists 'libjxl_threads >= 0.8.0'
           pkg-config --static --libs libjxl
           pkg-config --static --libs libjxl_threads
 
-          test -s "$DEPS/lib/libjxl.a"
-          test -s "$DEPS/lib/libjxl_threads.a"
-          
           if ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
             --arch=aarch64 \
             --enable-cross-compile \
-            --enable-gpl \
             --enable-version3 \
             --enable-nonfree \
             --sysroot="$SYSROOT" \
@@ -2437,28 +2466,43 @@ jobs:
             --enable-librubberband \
             --enable-libvmaf \
             --enable-libjxl
-            
           then
             echo "FFmpeg configure succeeded."
           else
-            echo "=== JPEG XL failure details ==="
-            grep -n -A35 -B15 \
-              'JxlThreadParallelRunner\|libjxl_threads' \
-              "$SRC/ffbuild/config.log" || true
+            CONFIG_LOG="$SRC/ffbuild/config.log"
+
+            echo "::error::FFmpeg configure failed."
+
+            if [ -s "$CONFIG_LOG" ]; then
+              echo "=== JPEG XL and related linker diagnostics ==="
+              grep -n -A45 -B20 \
+                'JxlThreadParallelRunner\|libjxl_threads\|libjxl\|ERROR:' \
+                "$CONFIG_LOG" || true
+
+              echo "=== Last 100 lines of configure log ==="
+              tail -n 100 "$CONFIG_LOG"
+            else
+              echo "::error::Expected configure log not found: $CONFIG_LOG"
+              echo "=== Locate available configure logs ==="
+              find "$SRC" "$RUNNER_TEMP" \
+                -type f -name config.log -print 2>/dev/null || true
+            fi
+
             exit 1
           fi
-          
+
           echo "=== Verify selected FFmpeg features ==="
           for feature in \
             LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
             LIBFREETYPE LIBFONTCONFIG LIBFRIBIDI LIBHARFBUZZ LIBASS \
             LIBWEBP LIBOPENJPEG LIBLC3 LIBTHEORA LIBOPENMPT \
             LIBOPUS LIBVORBIS LIBMP3LAME LIBTWOLAME LIBSPEEX LIBSOXR \
-            LIBCODEC2 LIBFDK_AAC LIBXVID LIBRTMP LIBBLURAY LIBRUBBERBAND LIBVMAF; do
+            LIBCODEC2 LIBFDK_AAC LIBXVID LIBRTMP LIBBLURAY \
+            LIBRUBBERBAND LIBVMAF LIBJXL; do
             if grep -q "^#define CONFIG_${feature} 1$" config.h; then
               echo "ENABLED: $feature"
             else
-              echo "ERROR: $feature is not enabled"
+              echo "::error::${feature} is not enabled"
               exit 1
             fi
           done
