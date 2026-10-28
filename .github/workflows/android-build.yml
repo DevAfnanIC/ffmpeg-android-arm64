@@ -2465,7 +2465,8 @@ jobs:
             --enable-libbluray \
             --enable-librubberband \
             --enable-libvmaf \
-            --enable-libjxl
+            --enable-libjxl \
+            --extra-libs="-lc++"
           then
             echo "FFmpeg configure succeeded."
           else
