@@ -2183,33 +2183,36 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "$RUNNER_TEMP"
+          SRC="$RUNNER_TEMP/libjxl"
+          BUILD="$RUNNER_TEMP/libjxl-build"
 
-          echo "=== Clone libjxl ==="
+          export PATH="$TOOLCHAIN/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          echo "=== Clone libjxl v0.11.1 ==="
+          rm -rf "$SRC" "$BUILD"
+
           git clone \
             --branch v0.11.1 \
             --depth 1 \
             --recurse-submodules \
             --shallow-submodules \
             https://github.com/libjxl/libjxl.git \
-            libjxl
+            "$SRC"
 
-          cd "$RUNNER_TEMP/libjxl"
-
-          echo "=== Configure libjxl ==="
-          cmake -S . -B build \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+          echo "=== Configure static Android ARM64 build ==="
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$DEPS" \
             -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_INSTALL_INCLUDEDIR=include \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
             -DCMAKE_PREFIX_PATH="$DEPS" \
-            -DCMAKE_FIND_ROOT_PATH="$DEPS" \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
             -DBUILD_SHARED_LIBS=OFF \
             -DBUILD_TESTING=OFF \
             -DJPEGXL_ENABLE_TOOLS=OFF \
@@ -2222,30 +2225,40 @@ jobs:
             -DJPEGXL_ENABLE_SKCMS=OFF \
             -DJPEGXL_ENABLE_SJPEG=OFF \
             -DJPEGXL_ENABLE_TCMALLOC=OFF \
-            -DJPEGXL_ENABLE_LTO=OFF \
-            -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
-            -DJPEGXL_FORCE_SYSTEM_HWY=OFF \
-            -DJPEGXL_FORCE_SYSTEM_LCMS2=OFF
+            -DJPEGXL_ENABLE_LTO=OFF
 
           echo "=== Build and install libjxl ==="
-          cmake --build build --parallel "$BUILD_JOBS"
-          cmake --install build
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
 
-          echo "=== Verify libjxl headers and libraries ==="
+          echo "=== Inspect installed JPEG XL artifacts ==="
+          find "$DEPS/lib" -maxdepth 2 \
+            \( -iname '*jxl*.a' -o -iname '*jxl*.pc' \) \
+            -print | sort
+
+          echo "=== Verify required static libraries ==="
+          test -s "$DEPS/lib/libjxl.a"
+          test -s "$DEPS/lib/libjxl_threads.a"
           test -s "$DEPS/include/jxl/decode.h"
           test -s "$DEPS/include/jxl/encode.h"
+          test -s "$DEPS/include/jxl/thread_parallel_runner.h"
 
-          find "$DEPS/lib" -maxdepth 2 \
-            \( -name '*jxl*.a' -o -name '*jxl*.pc' \) -print
+          echo "=== Verify required pkg-config files ==="
+          test -s "$DEPS/lib/pkgconfig/libjxl.pc"
+          test -s "$DEPS/lib/pkgconfig/libjxl_threads.pc"
 
-          echo "=== Verify pkg-config ==="
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
-
+          echo "=== Verify libjxl package ==="
           pkg-config --modversion libjxl
-          pkg-config --exists libjxl
+          pkg-config --exists 'libjxl >= 0.8.0'
           pkg-config --static --libs libjxl
+
+          echo "=== Verify libjxl_threads package ==="
+          pkg-config --modversion libjxl_threads
+          pkg-config --exists 'libjxl_threads >= 0.8.0'
+          pkg-config --cflags libjxl_threads
+          pkg-config --static --libs libjxl_threads
+
+          echo "libjxl and libjxl_threads built and verified."
           
       - name: Configure FFmpeg
         shell: bash
@@ -2316,7 +2329,20 @@ jobs:
           pkg-config --exists 'libvmaf >= 2.0.0'
           pkg-config --static --libs libvmaf
 
-          set +e
+          echo "=== Verify JPEG XL packages before FFmpeg configure ==="
+
+          pkg-config --exists 'libjxl >= 0.8.0'
+          pkg-config --exists 'libjxl_threads >= 0.8.0'
+
+          pkg-config --modversion libjxl
+          pkg-config --modversion libjxl_threads
+
+          pkg-config --static --libs libjxl
+          pkg-config --static --libs libjxl_threads
+
+          test -s "$DEPS/lib/libjxl.a"
+          test -s "$DEPS/lib/libjxl_threads.a"
+          
           ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
