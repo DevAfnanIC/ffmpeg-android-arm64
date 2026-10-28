@@ -2060,24 +2060,68 @@ jobs:
         run: |
           set -euo pipefail
 
-          cd "$RUNNER_TEMP"
+          SRC="$RUNNER_TEMP/vmaf-src"
+          BUILD="$RUNNER_TEMP/vmaf-build"
+          CROSS_FILE="$RUNNER_TEMP/android-arm64-vmaf.ini"
 
-          echo "=== Clone libvmaf ==="
-          git clone \
-            --branch v3.0.0 \
-            --depth 1 \
+          export PATH="$TOOLCHAIN/bin:$HOME/.local/bin:$PATH"
+
+          # Fetch a pinned VMAF release.
+          rm -rf "$SRC" "$BUILD"
+
+          git clone --depth 1 --branch v3.0.0 \
             https://github.com/Netflix/vmaf.git \
-            vmaf
+            "$SRC"
 
-          cd "$RUNNER_TEMP/vmaf"
+          # VMAF's library source is in the libvmaf subdirectory.
+          test -f "$SRC/libvmaf/meson.build" || {
+            echo "::error::VMAF Meson build definition not found."
+            find "$SRC" -maxdepth 3 -name meson.build -print
+            exit 1
+          }
 
-          echo "=== Configure libvmaf for Android ARM64 ==="
-          meson setup build \
-            --cross-file "$RUNNER_TEMP/android-arm64.meson" \
-            --prefix "$DEPS" \
-            --libdir lib \
-            --buildtype release \
-            --default-library static \
+          # Configure the Android ARM64 cross compiler.
+          cat > "$CROSS_FILE" <<EOF
+          [binaries]
+          c = '$CC'
+          cpp = '$CXX'
+          ar = '$AR'
+          strip = '$STRIP'
+          pkg-config = 'pkg-config'
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+
+          [properties]
+          needs_exe_wrapper = true
+
+          [built-in options]
+          c_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-fPIC']
+          c_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          cpp_args = ['--sysroot=$SYSROOT', '-I$DEPS/include', '-fPIC']
+          cpp_link_args = ['--sysroot=$SYSROOT', '-L$DEPS/lib']
+          EOF
+
+          # Install build tools.
+          python3 -m pip install --user meson ninja
+
+          export PATH="$HOME/.local/bin:$PATH"
+          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
+          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+          unset PKG_CONFIG_SYSROOT_DIR
+
+          mkdir -p "$DEPS/lib/pkgconfig"
+
+          # Build a static library; disable optional host-specific features.
+          meson setup "$BUILD" "$SRC/libvmaf" \
+            --cross-file "$CROSS_FILE" \
+            --prefix="$DEPS" \
+            --libdir=lib \
+            --default-library=static \
+            --buildtype=release \
             -Denable_tests=false \
             -Denable_docs=false \
             -Denable_cuda=false \
@@ -2087,37 +2131,52 @@ jobs:
             -Denable_asm=true \
             -Dbuilt_in_models=true
 
-          echo "=== Build and install libvmaf ==="
-          meson compile -C build -j "$BUILD_JOBS"
-          meson install -C build
+          meson compile -C "$BUILD" -j "$BUILD_JOBS"
+          meson install -C "$BUILD"
 
-          echo "=== Verify installed VMAF files ==="
-          test -s "$DEPS/lib/libvmaf.a"
-          test -s "$DEPS/include/libvmaf.h"
-          test -s "$DEPS/lib/pkgconfig/libvmaf.pc"
+          echo "=== Add Android C++ runtime to static VMAF link flags ==="
 
-          echo "=== Add Android C++ runtime to VMAF link flags ==="
           VMAF_PC="$DEPS/lib/pkgconfig/libvmaf.pc"
+          test -s "$VMAF_PC"
 
-          if ! grep -q -- '-lc++' "$VMAF_PC"; then
-            sed -i '/^Libs:/ s/-lvmaf/-lvmaf -lc++/' "$VMAF_PC"
-          fi
+          sed -i '/^Libs:/ s/-lvmaf/-lvmaf -lc++/' "$VMAF_PC"
 
+          echo "=== Verify updated VMAF link flags ==="
           grep '^Libs:' "$VMAF_PC"
+          pkg-config --static --libs libvmaf
 
-          echo "=== Verify VMAF pkg-config metadata ==="
-          export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
-          unset PKG_CONFIG_SYSROOT_DIR
+          pkg-config --static --libs libvmaf | grep -q -- '-lc++' || {
+            echo "ERROR: Android C++ runtime flag missing from libvmaf.pc"
+            exit 1
+          }
 
+          # Verify installed artifacts.
+          test -s "$DEPS/lib/libvmaf.a" || {
+            echo "::error::libvmaf.a was not installed."
+            find "$DEPS" -iname '*vmaf*' -print
+            exit 1
+          }
+
+          test -s "$DEPS/lib/pkgconfig/libvmaf.pc" || {
+            echo "::error::libvmaf.pc was not installed."
+            exit 1
+          }
+
+          test -f "$DEPS/include/libvmaf/libvmaf.h" || {
+            echo "::error::libvmaf.h was not installed."
+            find "$DEPS/include" -iname '*vmaf*' -print
+            exit 1
+          }
+
+          echo "=== Verify VMAF pkg-config ==="
           pkg-config --modversion libvmaf
-          pkg-config --exists 'libvmaf >= 2.0.0'
-          pkg-config --static --libs libvmaf |
-            tee "$RUNNER_TEMP/libvmaf-link-flags.txt"
+          pkg-config --cflags libvmaf
+          pkg-config --static --libs libvmaf
 
-          grep -q -- '-lc++' "$RUNNER_TEMP/libvmaf-link-flags.txt"
+          echo "=== Verify static library ==="
+          ls -lh "$DEPS/lib/libvmaf.a"
 
-          echo "libvmaf build and verification succeeded."
+          echo "libvmaf built successfully for Android ARM64."
 
       - name: Build libjxl
         shell: bash
