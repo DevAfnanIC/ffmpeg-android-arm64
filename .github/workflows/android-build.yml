@@ -2260,35 +2260,41 @@ jobs:
 
           echo "libjxl and libjxl_threads built and verified."
 
-      - name: Diagnose JPEG XL pkg-config
+      - name: Diagnose JPEG XL linker test
         shell: bash
         run: |
           set -euo pipefail
 
+          export PATH="$TOOLCHAIN/bin:$PATH"
           export PKG_CONFIG_PATH="$DEPS/lib/pkgconfig"
           export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
           unset PKG_CONFIG_SYSROOT_DIR
 
-          echo "=== libjxl_threads.pc location ==="
-          pkg-config --variable=pcfiledir libjxl_threads
-
-          echo "=== libjxl_threads.pc contents ==="
-          cat "$DEPS/lib/pkgconfig/libjxl_threads.pc"
-
-          echo "=== Required header ==="
-          test -s "$DEPS/include/jxl/thread_parallel_runner.h"
-          grep -n "JxlThreadParallelRunner" \
-            "$DEPS/include/jxl/thread_parallel_runner.h"
-
-          echo "=== pkg-config dependency check ==="
-          pkg-config --exists 'libjxl_threads >= 0.7.0'
-          pkg-config --modversion libjxl_threads
-          pkg-config --cflags --libs libjxl_threads
-
-          echo "=== Required symbol in static library ==="
+          echo "=== Verify JPEG XL thread library ==="
           test -s "$DEPS/lib/libjxl_threads.a"
-          llvm-nm --defined-only "$DEPS/lib/libjxl_threads.a" \
+
+          "$TOOLCHAIN/bin/llvm-nm" --defined-only \
+            "$DEPS/lib/libjxl_threads.a" \
             | grep 'JxlThreadParallelRunner'
+
+          echo "=== Verify pkg-config metadata ==="
+          pkg-config --modversion libjxl_threads
+          pkg-config --exists 'libjxl_threads >= 0.7.0'
+          pkg-config --cflags libjxl_threads
+          pkg-config --static --libs libjxl_threads
+
+          echo "=== Inspect FFmpeg configure log ==="
+          CONFIG_LOG="$RUNNER_TEMP/ffmpeg/ffbuild/config.log"
+
+          if [ ! -s "$CONFIG_LOG" ]; then
+            echo "Configure log not found at: $CONFIG_LOG"
+            find "$RUNNER_TEMP/ffmpeg" -name config.log -print
+            exit 1
+          fi
+
+          grep -n -A35 -B15 \
+            'JxlThreadParallelRunner\|libjxl_threads' \
+            "$CONFIG_LOG" || true
             
       - name: Configure FFmpeg
         shell: bash
@@ -2373,7 +2379,7 @@ jobs:
           test -s "$DEPS/lib/libjxl.a"
           test -s "$DEPS/lib/libjxl_threads.a"
           
-          ./configure \
+          if ./configure \
             --prefix="$PREFIX" \
             --target-os=android \
             --arch=aarch64 \
@@ -2431,7 +2437,17 @@ jobs:
             --enable-librubberband \
             --enable-libvmaf \
             --enable-libjxl
-
+            
+          then
+            echo "FFmpeg configure succeeded."
+          else
+            echo "=== JPEG XL failure details ==="
+            grep -n -A35 -B15 \
+              'JxlThreadParallelRunner\|libjxl_threads' \
+              "$SRC/ffbuild/config.log" || true
+            exit 1
+          fi
+          
           echo "=== Verify selected FFmpeg features ==="
           for feature in \
             LIBX264 LIBX265 LIBVPX LIBAOM LIBDAV1D LIBSVTAV1 \
