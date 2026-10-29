@@ -2383,9 +2383,12 @@ jobs:
           ls -lh "$DEPS/lib/liblcms2.a"
 
           echo "=== Verify Android logging library ==="
-          if [ ! -s "$SYSROOT/usr/lib/aarch64-linux-android/liblog.so ] && \
-             [ ! -s "$SYSROOT/usr/lib/aarch64-linux-android/${ANDROID_API}/liblog.so" ]; then
-            echo "::warning::Could not find liblog.so at the usual sysroot paths; the NDK linker may still locate it by -llog."
+          if find "$SYSROOT/usr/lib" \
+              -type f -name 'liblog.so' -print -quit 2>/dev/null \
+              | grep -q .; then
+            echo "Found liblog.so in the Android NDK sysroot."
+          else
+            echo "::warning::liblog.so was not found by the sysroot check; the NDK linker may still resolve -llog."
           fi
 
           echo "=== Verify JPEG XL thread-runner symbols ==="
@@ -2425,7 +2428,7 @@ jobs:
             pkg-config --modversion lcms2
             pkg-config --static --libs lcms2
           else
-            echo "No lcms2.pc found; the final FFmpeg link will explicitly include -llcms2."
+            echo "No lcms2.pc found; FFmpeg will link LCMS2 explicitly using -llcms2."
           fi
 
           echo "=== Verify FFmpeg-compatible JPEG XL versions ==="
