@@ -2184,48 +2184,81 @@ jobs:
           set -euo pipefail
 
           SRC="$RUNNER_TEMP/lcms2"
-          BUILD="$RUNNER_TEMP/lcms2-build"
+          ARCHIVE="$RUNNER_TEMP/lcms2-2.16.tar.gz"
 
           export PATH="$TOOLCHAIN/bin:$PATH"
 
-          echo "=== Clone LCMS2 ==="
-          rm -rf "$SRC" "$BUILD"
+          echo "=== Download LCMS2 2.16 release ==="
+          rm -rf "$SRC" "$ARCHIVE"
 
-          git clone \
-            --branch lcms2.16 \
-            --depth 1 \
-            https://github.com/mm2/Little-CMS.git \
-            "$SRC"
+          curl -fL \
+            --retry 3 \
+            --retry-delay 2 \
+            "https://github.com/mm2/Little-CMS/releases/download/lcms2.16/lcms2-2.16.tar.gz" \
+            -o "$ARCHIVE"
 
-          if [ ! -f "$SRC/CMakeLists.txt" ]; then
-            echo "::error::This LCMS2 source revision does not provide CMakeLists.txt."
-            echo "Use the project's supported build system to build LCMS2 for Android ARM64."
+          echo "=== Extract LCMS2 source ==="
+          mkdir -p "$SRC"
+          tar -xzf "$ARCHIVE" \
+            --strip-components=1 \
+            -C "$SRC"
+
+          if [ ! -x "$SRC/configure" ]; then
+            echo "::error::LCMS2 release archive does not contain an executable configure script."
             exit 1
           fi
 
           echo "=== Configure static Android ARM64 LCMS2 ==="
-          cmake -S "$SRC" -B "$BUILD" -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM="android-${ANDROID_API}" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$DEPS" \
-            -DCMAKE_INSTALL_LIBDIR=lib \
-            -DCMAKE_INSTALL_INCLUDEDIR=include \
-            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_TESTING=OFF
+          cd "$SRC"
 
-          echo "=== Build and install LCMS2 ==="
-          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
-          cmake --install "$BUILD"
+          CC="$CC" \
+          AR="$AR" \
+          RANLIB="$RANLIB" \
+          CFLAGS="-O2 -fPIC" \
+          CPPFLAGS="--sysroot=$SYSROOT" \
+          LDFLAGS="--sysroot=$SYSROOT" \
+          ./configure \
+            --build=x86_64-pc-linux-gnu \
+            --host=aarch64-linux-android \
+            --prefix="$DEPS" \
+            --libdir="$DEPS/lib" \
+            --includedir="$DEPS/include" \
+            --disable-shared \
+            --enable-static \
+            --with-pic
 
-          echo "=== Verify LCMS2 artifacts ==="
-          test -s "$DEPS/lib/liblcms2.a"
-          test -s "$DEPS/include/lcms2.h"
+          echo "=== Build LCMS2 ==="
+          make -j"$BUILD_JOBS"
 
-          echo "LCMS2 static library installed."
+          echo "=== Install LCMS2 ==="
+          make install
 
+          echo "=== Verify installed LCMS2 artifacts ==="
+          if [ ! -s "$DEPS/lib/liblcms2.a" ]; then
+            echo "::error::Missing static library: $DEPS/lib/liblcms2.a"
+            exit 1
+          fi
+
+          if [ ! -s "$DEPS/include/lcms2.h" ]; then
+            echo "::error::Missing header: $DEPS/include/lcms2.h"
+            exit 1
+          fi
+
+          ls -lh "$DEPS/lib/liblcms2.a"
+          ls -lh "$DEPS/include/lcms2.h"
+
+          echo "=== Verify archive contents ==="
+          "$TOOLCHAIN/bin/llvm-ar" t "$DEPS/lib/liblcms2.a" | head -n 10
+
+          echo "=== Verify LCMS2 pkg-config metadata ==="
+          if [ -s "$DEPS/lib/pkgconfig/lcms2.pc" ]; then
+            cat "$DEPS/lib/pkgconfig/lcms2.pc"
+          else
+            echo "::warning::No lcms2.pc installed; FFmpeg will link LCMS2 explicitly using -llcms2."
+          fi
+
+          echo "LCMS2 static Android ARM64 build completed successfully."
+          
       - name: Build libjxl
         shell: bash
         run: |
