@@ -2178,6 +2178,54 @@ jobs:
 
           echo "libvmaf built successfully for Android ARM64."
 
+      - name: Build LCMS2
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SRC="$RUNNER_TEMP/lcms2"
+          BUILD="$RUNNER_TEMP/lcms2-build"
+
+          export PATH="$TOOLCHAIN/bin:$PATH"
+
+          echo "=== Clone LCMS2 ==="
+          rm -rf "$SRC" "$BUILD"
+
+          git clone \
+            --branch lcms2.16 \
+            --depth 1 \
+            https://github.com/mm2/Little-CMS.git \
+            "$SRC"
+
+          if [ ! -f "$SRC/CMakeLists.txt" ]; then
+            echo "::error::This LCMS2 source revision does not provide CMakeLists.txt."
+            echo "Use the project's supported build system to build LCMS2 for Android ARM64."
+            exit 1
+          fi
+
+          echo "=== Configure static Android ARM64 LCMS2 ==="
+          cmake -S "$SRC" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM="android-${ANDROID_API}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$DEPS" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DCMAKE_INSTALL_INCLUDEDIR=include \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF
+
+          echo "=== Build and install LCMS2 ==="
+          cmake --build "$BUILD" --parallel "$BUILD_JOBS"
+          cmake --install "$BUILD"
+
+          echo "=== Verify LCMS2 artifacts ==="
+          test -s "$DEPS/lib/liblcms2.a"
+          test -s "$DEPS/include/lcms2.h"
+
+          echo "LCMS2 static library installed."
+
       - name: Build libjxl
         shell: bash
         run: |
